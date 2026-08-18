@@ -1,0 +1,9 @@
+{
+  "name": "音と光のインタラクティブ環境",
+  "short_name": "音と光",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "start_url": "./index.html",
+  "background_color": "#000000",
+  "theme_color": "#000000"
+}

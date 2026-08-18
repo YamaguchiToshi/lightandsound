@@ -1,0 +1,1686 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="音と光">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#000000">
+  <link rel="manifest" href="manifest.json">
+  <title>音と光のインタラクティブ環境</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: none;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background-color: #000000;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: #ffffff;
+    }
+
+    #stage {
+      display: block;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      height: 100dvh; /* iOS Safari動的ビューポート対応 */
+      background-color: #000000;
+    }
+
+    /* 起動オーバーレイ */
+    #start-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: radial-gradient(circle at center, rgba(10, 15, 30, 0.94) 0%, rgba(0, 0, 0, 0.98) 100%);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      z-index: 100;
+      cursor: pointer;
+      transition: opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    #start-overlay.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .start-button {
+      padding: 24px 52px;
+      font-size: 2.1rem;
+      font-weight: bold;
+      letter-spacing: 0.05em;
+      color: #ffffff;
+      background: linear-gradient(135deg, #00f0ff 0%, #3a7bd5 50%, #9d4edd 100%);
+      border: none;
+      border-radius: 50px;
+      box-shadow: 0 0 40px rgba(0, 240, 255, 0.65), 0 0 80px rgba(157, 78, 221, 0.35);
+      cursor: pointer;
+      animation: pulse 2.5s infinite ease-in-out;
+    }
+
+    .start-subtext {
+      margin-top: 24px;
+      font-size: 1.15rem;
+      color: #bbccdd;
+      letter-spacing: 0.08em;
+      text-shadow: 0 0 10px rgba(0, 240, 255, 0.4);
+    }
+
+    @keyframes pulse {
+      0% { transform: scale(1); box-shadow: 0 0 30px rgba(0, 240, 255, 0.5); }
+      50% { transform: scale(1.04); box-shadow: 0 0 60px rgba(0, 240, 255, 0.85), 0 0 90px rgba(157, 78, 221, 0.5); }
+      100% { transform: scale(1); box-shadow: 0 0 30px rgba(0, 240, 255, 0.5); }
+    }
+
+    /* 右上コントロールボタン群 */
+    .top-controls {
+      position: absolute;
+      top: 18px;
+      right: 18px;
+      display: flex;
+      gap: 12px;
+      z-index: 50;
+    }
+
+    .icon-button {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.12);
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      color: rgba(255, 255, 255, 0.85);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-size: 20px;
+      cursor: pointer;
+      transition: background 0.3s, opacity 0.3s, transform 0.2s;
+      opacity: 0.40;
+    }
+
+    .icon-button:hover, .icon-button:active {
+      opacity: 1;
+      background: rgba(255, 255, 255, 0.32);
+      transform: scale(1.08);
+    }
+
+    .action-btn {
+      width: 100%;
+      padding: 12px 16px;
+      font-size: 0.95rem;
+      font-weight: bold;
+      color: #00f0ff;
+      background: rgba(0, 240, 255, 0.12);
+      border: 1px solid rgba(0, 240, 255, 0.4);
+      border-radius: 8px;
+      cursor: pointer;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.2s ease;
+    }
+
+    .action-btn:hover, .action-btn:active {
+      background: rgba(0, 240, 255, 0.25);
+      border-color: #00f0ff;
+      transform: scale(0.99);
+    }
+
+    .pwa-guide {
+      margin-top: 12px;
+      padding: 12px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px dashed rgba(255, 255, 255, 0.2);
+      border-radius: 8px;
+      font-size: 0.78rem;
+      color: #ccd8e8;
+      line-height: 1.45;
+    }
+
+    /* 設定パネル */
+    #settings-panel {
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: 360px;
+      max-width: 92vw;
+      height: 100%;
+      height: 100vh;
+      height: 100dvh;
+      background: rgba(12, 16, 26, 0.96);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      box-shadow: -8px 0 35px rgba(0, 0, 0, 0.85);
+      border-left: 1px solid rgba(255, 255, 255, 0.1);
+      z-index: 80;
+      padding: 26px 22px 60px 22px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      -webkit-overflow-scrolling: touch;
+      touch-action: pan-y;
+      overscroll-behavior-y: contain;
+      transform: translateX(100%);
+      transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+      color: #e4e8f0;
+    }
+
+    #settings-panel * {
+      touch-action: auto;
+    }
+
+    #settings-panel input[type="range"] {
+      touch-action: pan-x;
+    }
+
+    #settings-panel::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    #settings-panel::-webkit-scrollbar-track {
+      background: rgba(0, 0, 0, 0.25);
+    }
+
+    #settings-panel::-webkit-scrollbar-thumb {
+      background: rgba(0, 240, 255, 0.45);
+      border-radius: 4px;
+    }
+
+    #settings-panel::-webkit-scrollbar-thumb:hover {
+      background: rgba(0, 240, 255, 0.85);
+    }
+
+    #settings-panel.open {
+      transform: translateX(0);
+    }
+
+    .settings-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 22px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+    }
+
+    .settings-header h2 {
+      font-size: 1.25rem;
+      letter-spacing: 0.05em;
+      color: #00f0ff;
+    }
+
+    .close-btn {
+      background: none;
+      border: none;
+      color: #8899aa;
+      font-size: 26px;
+      cursor: pointer;
+      transition: color 0.2s;
+    }
+
+    .close-btn:hover {
+      color: #ffffff;
+    }
+
+    .setting-item {
+      margin-bottom: 20px;
+    }
+
+    .setting-item label {
+      display: block;
+      font-size: 0.86rem;
+      margin-bottom: 8px;
+      color: #bbccdd;
+    }
+
+    .setting-item label span {
+      float: right;
+      color: #00f0ff;
+      font-weight: bold;
+    }
+
+    .setting-item input[type="range"] {
+      width: 100%;
+      height: 6px;
+      border-radius: 3px;
+      background: #202738;
+      outline: none;
+      -webkit-appearance: none;
+    }
+
+    .setting-item input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #00f0ff;
+      box-shadow: 0 0 10px rgba(0, 240, 255, 0.7);
+      cursor: pointer;
+    }
+
+    .setting-item select {
+      width: 100%;
+      padding: 9px 12px;
+      border-radius: 8px;
+      background: #1a2233;
+      border: 1px solid #2e3a52;
+      color: #fff;
+      font-size: 0.9rem;
+      outline: none;
+    }
+
+    .virtual-gravity-debug {
+      margin-top: 18px;
+      padding: 12px;
+      background: rgba(0, 0, 0, 0.5);
+      border: 1px solid rgba(0, 240, 255, 0.2);
+      border-radius: 8px;
+      font-family: monospace;
+      font-size: 0.82rem;
+      color: #00ffcc;
+      line-height: 1.4;
+    }
+
+    .projector-tip {
+      margin-top: 14px;
+      padding: 12px;
+      background: rgba(0, 240, 255, 0.08);
+      border: 1px solid rgba(0, 240, 255, 0.25);
+      border-radius: 8px;
+      font-size: 0.80rem;
+      color: #aaeaff;
+      line-height: 1.45;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- メインCanvas -->
+  <canvas id="stage"></canvas>
+
+  <!-- 起動オーバーレイ -->
+  <div id="start-overlay">
+    <button class="start-button" id="btn-start">画面に触れてスタート</button>
+    <div class="start-subtext">音と光のインタラクティブ環境 v0.4 (Projector & Fluid Engine)</div>
+  </div>
+
+  <!-- 右上コントロール（全画面 ＆ 設定） -->
+  <div class="top-controls">
+    <div class="icon-button" id="fullscreen-toggle" title="全画面表示 (Fullscreen)">⛶</div>
+    <div class="icon-button" id="settings-toggle" title="設定">⚙</div>
+  </div>
+
+  <!-- 設定パネル -->
+  <div id="settings-panel">
+    <div class="settings-header">
+      <h2>パラメータ調整</h2>
+      <button class="close-btn" id="btn-close-settings">✕</button>
+    </div>
+
+    <div class="setting-item">
+      <button class="action-btn" id="btn-toggle-fullscreen">⛶ 全画面表示の切替 (Fullscreen)</button>
+    </div>
+
+    <div class="setting-item">
+      <label>表示モード (Display Mode)</label>
+      <select id="select-display-mode">
+        <option value="projector">会議室プロジェクター・大画面（高彩度・高視認性）</option>
+        <option value="standard">iPad / Retina画面（標準）</option>
+      </select>
+    </div>
+
+    <div class="setting-item" id="item-projector-boost">
+      <label>プロジェクター視認性スケール <span id="val-projector-boost">1.40</span></label>
+      <input type="range" id="param-projector-boost" min="1.0" max="2.4" step="0.05" value="1.40">
+    </div>
+
+    <div class="setting-item">
+      <label>色彩テーマ (Color Theme)</label>
+      <select id="select-color-theme">
+        <option value="aurora">オーロラ・コズミック (Aurora Cosmic)</option>
+        <option value="ocean">夜光の海 (Bioluminescent Ocean)</option>
+        <option value="sakura">桜・夕霞 (Sakura Twilight)</option>
+        <option value="fire">太陽・火の鳥 (Solar Phoenix)</option>
+        <option value="moonlight">月光・ダイヤモンド (Moonlight Diamond)</option>
+        <option value="cyber">ネオンサイバー (Neon Cyber)</option>
+      </select>
+    </div>
+
+    <div class="setting-item">
+      <label>入力モード</label>
+      <select id="select-input-mode">
+        <option value="both">傾斜 + ポインター（自動合成）</option>
+        <option value="tilt">iPadの傾斜のみ</option>
+        <option value="pointer">ポインター／タッチのみ</option>
+      </select>
+    </div>
+
+    <div class="setting-item">
+      <label>有効な傾斜軸</label>
+      <select id="select-gravity-axes">
+        <option value="x-only">左右の傾きのみ（X軸）</option>
+        <option value="xy">左右 ＋ 上下の傾き（X軸 ＋ Y軸）</option>
+      </select>
+    </div>
+
+    <div class="setting-item">
+      <label>傾斜応答感度 (Tilt Sensitivity) <span id="val-tilt-sensitivity">2.2</span></label>
+      <input type="range" id="param-tilt-sensitivity" min="0.5" max="4.5" step="0.1" value="2.2">
+    </div>
+
+    <div class="setting-item">
+      <label>多重渦の強さ (Curl Turbulence) <span id="val-curl-strength">1.4</span></label>
+      <input type="range" id="param-curl-strength" min="0.0" max="3.0" step="0.1" value="1.4">
+    </div>
+
+    <div class="setting-item">
+      <label>流体空間スケール (Flow Scale) <span id="val-flow-scale">1.6</span></label>
+      <input type="range" id="param-flow-scale" min="0.5" max="4.0" step="0.1" value="1.6">
+    </div>
+
+    <div class="setting-item">
+      <label>残像寿命 (Trail Tau - 秒) <span id="val-trail-tau">0.65</span></label>
+      <input type="range" id="param-trail-tau" min="0.15" max="2.5" step="0.05" value="0.65">
+    </div>
+
+    <div class="setting-item">
+      <label>光粒子の数 <span id="val-particle-count">280</span></label>
+      <input type="range" id="param-particle-count" min="50" max="700" step="10" value="280">
+    </div>
+
+    <div class="setting-item">
+      <label>光粒子の基本サイズ <span id="val-particle-size">6</span></label>
+      <input type="range" id="param-particle-size" min="3" max="18" step="1" value="6">
+    </div>
+
+    <div class="setting-item">
+      <label>主音量 (Master Volume) <span id="val-master-volume">0.6</span></label>
+      <input type="range" id="param-master-volume" min="0.0" max="1.0" step="0.05" value="0.6">
+    </div>
+
+    <div class="setting-item">
+      <label>流体音の豊かさ (Fluid Bed Gain) <span id="val-stream-volume">0.5</span></label>
+      <input type="range" id="param-stream-volume" min="0.0" max="1.0" step="0.05" value="0.5">
+    </div>
+
+    <div class="setting-item">
+      <label>結晶ベル発音頻度 (Chime Density) <span id="val-sound-density">0.25</span></label>
+      <input type="range" id="param-sound-density" min="0.05" max="0.8" step="0.05" value="0.25">
+    </div>
+
+    <div class="setting-item">
+      <label>音階スケール</label>
+      <select id="select-pitch-scale">
+        <option value="pentatonic">ペンタトニック（和風・神秘的）</option>
+        <option value="major">メジャースケール（明るい）</option>
+        <option value="crystal">クリスタルベル（高音・キラキラ）</option>
+      </select>
+    </div>
+
+    <div class="virtual-gravity-debug">
+      Virtual Gravity:<br>
+      X: <span id="debug-gx">0.00</span> | Y: <span id="debug-gy">0.00</span><br>
+      Audio: 3-Tier Granular & Modal Engine
+    </div>
+
+    <div class="projector-tip">
+      💡 <b>プロジェクター投影のコツ</b>: 会議室用プロジェクター本体の映像モードを「プレゼンテーション（文字用）」から「シネマ」または「sRGB / ゲーム」に変更し、部屋の照明を少し落とすと光粒の立体感と透明感が劇的に引き立ちます。
+    </div>
+
+    <div class="pwa-guide">
+      📱 <b>iPadでアドレスバーを完全に消す方法</b>:<br>
+      Safariの共有ボタン（四角から上矢印）をタップし、メニューから「<b>ホーム画面に追加</b>」を選択すると、ブラウザ枠が一切ない完全な全画面アプリとして起動できます。
+    </div>
+  </div>
+
+  <script>
+    /** ユーティリティ: 値のクランプ */
+    function clamp(value, min, max) {
+      return value < min ? min : value > max ? max : value;
+    }
+
+    /**
+     * COLOR THEMES - 白飛びを防ぎ、豊かな色彩美を保つパレット定義
+     */
+    const THEMES = {
+      aurora: {
+        name: 'Aurora Cosmic',
+        palettes: [
+          { name: 'cyan',     core: 'rgba(170, 245, 255, 0.85)', halo: 'rgba(0, 220, 255, 0.70)',   corona: 'rgba(0, 140, 255, 0.18)' },
+          { name: 'sapphire', core: 'rgba(180, 205, 255, 0.85)', halo: 'rgba(60, 115, 255, 0.70)',  corona: 'rgba(30, 70, 210, 0.18)' },
+          { name: 'violet',   core: 'rgba(230, 180, 255, 0.85)', halo: 'rgba(170, 60, 255, 0.70)',  corona: 'rgba(110, 30, 200, 0.18)' },
+          { name: 'gold',     core: 'rgba(255, 235, 170, 0.85)', halo: 'rgba(255, 185, 30, 0.70)',  corona: 'rgba(230, 110, 10, 0.18)' },
+          { name: 'emerald',  core: 'rgba(180, 255, 225, 0.85)', halo: 'rgba(30, 230, 165, 0.70)',  corona: 'rgba(10, 160, 105, 0.18)' }
+        ]
+      },
+      ocean: {
+        name: 'Bioluminescent Ocean',
+        palettes: [
+          { name: 'aqua',     core: 'rgba(175, 255, 245, 0.85)', halo: 'rgba(0, 235, 210, 0.70)',   corona: 'rgba(0, 160, 190, 0.18)' },
+          { name: 'deepsea',  core: 'rgba(170, 215, 255, 0.85)', halo: 'rgba(0, 140, 245, 0.70)',   corona: 'rgba(0, 70, 180, 0.18)' },
+          { name: 'biolum',   core: 'rgba(190, 255, 220, 0.85)', halo: 'rgba(40, 235, 150, 0.70)',  corona: 'rgba(15, 170, 110, 0.18)' },
+          { name: 'jellyfish',core: 'rgba(220, 195, 255, 0.85)', halo: 'rgba(145, 95, 245, 0.70)',  corona: 'rgba(80, 40, 195, 0.18)' },
+          { name: 'pearl',    core: 'rgba(215, 240, 255, 0.85)', halo: 'rgba(130, 190, 255, 0.65)', corona: 'rgba(90, 140, 240, 0.18)' }
+        ]
+      },
+      sakura: {
+        name: 'Sakura Twilight',
+        palettes: [
+          { name: 'sakura',   core: 'rgba(255, 205, 225, 0.85)', halo: 'rgba(255, 120, 170, 0.70)', corona: 'rgba(240, 60, 125, 0.18)' },
+          { name: 'rose',     core: 'rgba(255, 185, 210, 0.85)', halo: 'rgba(250, 70, 135, 0.70)',  corona: 'rgba(210, 30, 95, 0.18)' },
+          { name: 'sunset',   core: 'rgba(255, 225, 175, 0.85)', halo: 'rgba(255, 160, 50, 0.70)',  corona: 'rgba(230, 90, 20, 0.18)' },
+          { name: 'twilight', core: 'rgba(235, 190, 255, 0.85)', halo: 'rgba(180, 85, 245, 0.70)',  corona: 'rgba(130, 40, 195, 0.18)' },
+          { name: 'blossom',  core: 'rgba(255, 225, 235, 0.85)', halo: 'rgba(255, 150, 190, 0.70)', corona: 'rgba(220, 90, 150, 0.18)' }
+        ]
+      },
+      fire: {
+        name: 'Solar Phoenix',
+        palettes: [
+          { name: 'solargold',core: 'rgba(255, 240, 170, 0.85)', halo: 'rgba(255, 195, 0, 0.75)',   corona: 'rgba(240, 120, 0, 0.20)' },
+          { name: 'flame',    core: 'rgba(255, 205, 160, 0.85)', halo: 'rgba(255, 95, 15, 0.75)',   corona: 'rgba(220, 45, 0, 0.20)' },
+          { name: 'ruby',     core: 'rgba(255, 185, 200, 0.85)', halo: 'rgba(250, 35, 75, 0.75)',   corona: 'rgba(190, 10, 45, 0.20)' },
+          { name: 'amber',    core: 'rgba(255, 220, 165, 0.85)', halo: 'rgba(255, 150, 20, 0.75)',  corona: 'rgba(200, 85, 5, 0.20)' },
+          { name: 'whitehot', core: 'rgba(255, 250, 220, 0.85)', halo: 'rgba(255, 210, 110, 0.75)', corona: 'rgba(240, 140, 40, 0.20)' }
+        ]
+      },
+      moonlight: {
+        name: 'Moonlight Diamond',
+        palettes: [
+          { name: 'purewhite',core: 'rgba(245, 250, 255, 0.85)', halo: 'rgba(200, 225, 255, 0.65)', corona: 'rgba(150, 190, 245, 0.18)' },
+          { name: 'iceblue',  core: 'rgba(215, 240, 255, 0.85)', halo: 'rgba(140, 200, 255, 0.68)', corona: 'rgba(80, 150, 235, 0.18)' },
+          { name: 'crystal',  core: 'rgba(235, 245, 255, 0.85)', halo: 'rgba(175, 215, 255, 0.65)', corona: 'rgba(120, 175, 245, 0.18)' },
+          { name: 'silver',   core: 'rgba(230, 235, 245, 0.85)', halo: 'rgba(165, 180, 210, 0.65)', corona: 'rgba(110, 130, 175, 0.18)' },
+          { name: 'celestial',core: 'rgba(220, 235, 255, 0.85)', halo: 'rgba(130, 175, 245, 0.68)', corona: 'rgba(75, 120, 220, 0.18)' }
+        ]
+      },
+      cyber: {
+        name: 'Neon Cyber',
+        palettes: [
+          { name: 'neonpink', core: 'rgba(255, 170, 220, 0.85)', halo: 'rgba(255, 0, 125, 0.75)',   corona: 'rgba(200, 0, 85, 0.20)' },
+          { name: 'neongreen',core: 'rgba(190, 255, 215, 0.85)', halo: 'rgba(0, 245, 95, 0.75)',    corona: 'rgba(0, 185, 65, 0.20)' },
+          { name: 'neoncyan', core: 'rgba(180, 250, 255, 0.85)', halo: 'rgba(0, 230, 255, 0.75)',   corona: 'rgba(0, 155, 220, 0.20)' },
+          { name: 'neonyellow',core: 'rgba(255, 250, 180, 0.85)',halo: 'rgba(255, 225, 0, 0.75)',   corona: 'rgba(210, 165, 0, 0.20)' },
+          { name: 'neonpurple',core: 'rgba(240, 180, 255, 0.85)', halo: 'rgba(180, 0, 255, 0.75)',  corona: 'rgba(130, 0, 200, 0.20)' }
+        ]
+      }
+    };
+
+    /**
+     * CONFIG - アプリケーション全体の設定値
+     */
+    const CONFIG = {
+      displayMode: 'projector', // 'projector': 会議室プロジェクター・大画面向け / 'standard': iPad画面向け
+      projectorBoost: 1.40,     // プロジェクター視認性・粒子サイズ倍率
+      inputMode: 'both',
+      gravityAxes: 'x-only',
+      colorTheme: 'aurora',
+      tiltSensitivity: 2.2,
+      curlStrength: 1.4,
+      flowScale: 1.6,
+      particleCount: 280,
+      particleSize: 6,
+      trailTau: 0.65,
+      dampingTau: 0.40,
+      masterVolume: 0.6,
+      streamVolume: 0.5,     // 流体連続音の音量
+      soundDensity: 0.25,     // 顕著結晶ベルの発音密度
+      pitchScale: 'pentatonic'
+    };
+
+    /**
+     * Simplex Noise 2D
+     */
+    const SimplexNoise = (function() {
+      const F2 = 0.5 * (Math.sqrt(3.0) - 1.0);
+      const G2 = (3.0 - Math.sqrt(3.0)) / 6.0;
+      
+      const p = new Uint8Array(256);
+      for (let i = 0; i < 256; i++) p[i] = (i * 157 + 97) & 255;
+      const perm = new Uint8Array(512);
+      const permMod12 = new Uint8Array(512);
+      for (let i = 0; i < 512; i++) {
+        perm[i] = p[i & 255];
+        permMod12[i] = perm[i] % 12;
+      }
+
+      const grad3 = new Float32Array([
+         1,1,0, -1,1,0, 1,-1,0, -1,-1,0,
+         1,0,1, -1,0,1, 1,0,-1, -1,0,-1,
+         0,1,1,  0,-1,1, 0,1,-1,  0,-1,-1
+      ]);
+
+      return {
+        noise2D(xin, yin) {
+          let n0, n1, n2;
+          const s = (xin + yin) * F2;
+          const i = Math.floor(xin + s);
+          const j = Math.floor(yin + s);
+          const t = (i + j) * G2;
+          const X0 = i - t;
+          const Y0 = j - t;
+          const x0 = xin - X0;
+          const y0 = yin - Y0;
+
+          let i1, j1;
+          if (x0 > y0) { i1 = 1; j1 = 0; }
+          else { i1 = 0; j1 = 1; }
+
+          const x1 = x0 - i1 + G2;
+          const y1 = y0 - j1 + G2;
+          const x2 = x0 - 1.0 + 2.0 * G2;
+          const y2 = y0 - 1.0 + 2.0 * G2;
+
+          const ii = i & 255;
+          const jj = j & 255;
+
+          let t0 = 0.5 - x0 * x0 - y0 * y0;
+          if (t0 < 0) n0 = 0.0;
+          else {
+            t0 *= t0;
+            const gi0 = permMod12[ii + perm[jj]] * 3;
+            n0 = t0 * t0 * (grad3[gi0] * x0 + grad3[gi0 + 1] * y0);
+          }
+
+          let t1 = 0.5 - x1 * x1 - y1 * y1;
+          if (t1 < 0) n1 = 0.0;
+          else {
+            t1 *= t1;
+            const gi1 = permMod12[ii + i1 + perm[jj + j1]] * 3;
+            n1 = t1 * t1 * (grad3[gi1] * x1 + grad3[gi1 + 1] * y1);
+          }
+
+          let t2 = 0.5 - x2 * x2 - y2 * y2;
+          if (t2 < 0) n2 = 0.0;
+          else {
+            t2 *= t2;
+            const gi2 = permMod12[ii + 1 + perm[jj + 1]] * 3;
+            n2 = t2 * t2 * (grad3[gi2] * x2 + grad3[gi2 + 1] * y2);
+          }
+
+          return 70.0 * (n0 + n1 + n2);
+        }
+      };
+    })();
+
+    /**
+     * 多重オクターブ Fractal Curl Noise (FBM)
+     */
+    function getFractalPotential(x, y, time) {
+      const baseScale = CONFIG.flowScale * 0.0014;
+      const t = time * 0.22;
+
+      let psi = SimplexNoise.noise2D(x * baseScale, y * baseScale + t) * 1.0;
+      psi += SimplexNoise.noise2D(x * baseScale * 2.1, y * baseScale * 2.1 + t * 1.4) * 0.45;
+      psi += SimplexNoise.noise2D(x * baseScale * 4.3, y * baseScale * 4.3 + t * 2.1) * 0.20;
+
+      return psi;
+    }
+
+    function getCurl(x, y, time) {
+      const eps = 1.4;
+      const n1 = getFractalPotential(x, y + eps, time);
+      const n2 = getFractalPotential(x, y - eps, time);
+      const dyp = (n1 - n2) / (2 * eps);
+
+      const m1 = getFractalPotential(x + eps, y, time);
+      const m2 = getFractalPotential(x - eps, y, time);
+      const dxp = (m1 - m2) / (2 * eps);
+
+      return {
+        x: dyp * 140.0,
+        y: -dxp * 140.0
+      };
+    }
+
+    /**
+     * Virtual Gravity
+     */
+    class VirtualGravity {
+      constructor() {
+        this.gx = 0.0;
+        this.gy = 0.0;
+        this.tiltGx = 0.0;
+        this.tiltGy = 0.0;
+        this.pointerGx = 0.0;
+        this.pointerGy = 0.0;
+
+        this.pointerActive = false;
+        this.pointerX = 0;
+        this.pointerY = 0;
+
+        this.initListeners();
+      }
+
+      initListeners() {
+        window.addEventListener('deviceorientation', (e) => {
+          if (CONFIG.inputMode === 'pointer') return;
+
+          let gamma = e.gamma || 0;
+          let beta = e.beta || 0;
+
+          let angle = 0;
+          if (window.screen && window.screen.orientation && window.screen.orientation.angle !== undefined) {
+            angle = window.screen.orientation.angle;
+          } else if (typeof window.orientation !== 'undefined') {
+            angle = window.orientation;
+          }
+
+          const isLandscapeMode = window.innerWidth > window.innerHeight;
+
+          let screenGx = 0;
+          let screenGy = 0;
+
+          if (angle === 90 || (isLandscapeMode && angle === 0)) {
+            screenGx = beta;
+            screenGy = -gamma;
+          } else if (angle === -90 || angle === 270) {
+            screenGx = -beta;
+            screenGy = gamma;
+          } else if (angle === 180) {
+            screenGx = -gamma;
+            screenGy = -beta;
+          } else {
+            screenGx = gamma;
+            screenGy = beta;
+          }
+
+          const maxAngle = 22;
+          const normGx = clamp(screenGx / maxAngle, -1.0, 1.0);
+          const normGy = clamp(screenGy / maxAngle, -1.0, 1.0);
+
+          this.tiltGx = normGx * CONFIG.tiltSensitivity;
+          this.tiltGy = normGy * CONFIG.tiltSensitivity;
+        });
+
+        const updatePointerGravity = (clientX, clientY) => {
+          const cx = window.innerWidth / 2;
+          const cy = window.innerHeight / 2;
+          this.pointerGx = clamp(((clientX - cx) / (cx * 0.7)) * (CONFIG.tiltSensitivity * 0.8), -2.5, 2.5);
+          this.pointerGy = clamp(((clientY - cy) / (cy * 0.7)) * (CONFIG.tiltSensitivity * 0.8), -2.5, 2.5);
+        };
+
+        window.addEventListener('pointermove', (e) => {
+          if (CONFIG.inputMode === 'tilt') return;
+          if (e.target && e.target.closest && e.target.closest('#settings-panel, .top-controls, #start-overlay')) return;
+          updatePointerGravity(e.clientX, e.clientY);
+          this.pointerActive = true;
+        });
+
+        window.addEventListener('pointerdown', (e) => {
+          if (CONFIG.inputMode === 'tilt') return;
+          if (e.target && e.target.closest && e.target.closest('#settings-panel, .top-controls, #start-overlay')) return;
+          updatePointerGravity(e.clientX, e.clientY);
+          this.pointerActive = true;
+        });
+
+        window.addEventListener('pointerup', () => {
+          this.pointerActive = false;
+        });
+      }
+
+      update() {
+        if (!this.pointerActive) {
+          this.pointerGx *= 0.90;
+          this.pointerGy *= 0.90;
+        }
+
+        let rawGx = 0;
+        let rawGy = 0;
+
+        if (CONFIG.inputMode === 'tilt') {
+          rawGx = this.tiltGx;
+          rawGy = this.tiltGy;
+        } else if (CONFIG.inputMode === 'pointer') {
+          rawGx = this.pointerGx;
+          rawGy = this.pointerGy;
+        } else {
+          rawGx = this.tiltGx + this.pointerGx;
+          rawGy = this.tiltGy + this.pointerGy;
+        }
+
+        this.gx = clamp(rawGx, -2.5, 2.5);
+
+        if (CONFIG.gravityAxes === 'x-only') {
+          this.gy = 0.0;
+        } else {
+          this.gy = clamp(rawGy, -2.5, 2.5);
+        }
+      }
+    }
+
+    /**
+     * Particle (白飛び防止・色彩保持グラデーション描画)
+     */
+    class Particle {
+      constructor(width, height) {
+        this.reset(width, height, true);
+      }
+
+      reset(width, height, initial = false) {
+        this.x = Math.random() * width;
+        this.y = Math.random() * height;
+        this.vx = (Math.random() - 0.5) * 1.5;
+        this.vy = (Math.random() - 0.5) * 1.5;
+        this.ax = 0;
+        this.ay = 0;
+
+        const rand = Math.random();
+        if (rand < 0.06) {
+          this.layer = 'bokeh';
+          this.sizeScale = 2.4 + Math.random() * 1.4;
+          this.sensitivity = 0.55 + Math.random() * 0.35;
+          this.alphaMultiplier = 0.22;
+        } else if (rand < 0.25) {
+          this.layer = 'stardust';
+          this.sizeScale = 0.35 + Math.random() * 0.35;
+          this.sensitivity = 1.1 + Math.random() * 0.6;
+          this.alphaMultiplier = 0.70;
+        } else {
+          this.layer = 'comet';
+          this.sizeScale = 0.8 + Math.random() * 0.6;
+          this.sensitivity = 0.9 + Math.random() * 0.5;
+          this.alphaMultiplier = 0.75;
+        }
+
+        this.dampingFactor = 0.88 + Math.random() * 0.25;
+
+        const theme = THEMES[CONFIG.colorTheme] || THEMES.aurora;
+        this.color = theme.palettes[Math.floor(Math.random() * theme.palettes.length)];
+        
+        this.history = [];
+        this.maxHistory = this.layer === 'comet' ? 5 : (this.layer === 'bokeh' ? 2 : 0);
+        for (let i = 0; i < this.maxHistory; i++) {
+          this.history.push({ x: this.x, y: this.y });
+        }
+
+        this.sparklePhase = Math.random() * Math.PI * 2;
+        this.sparkleSpeed = 0.06 + Math.random() * 0.12;
+      }
+
+      update(gx, gy, dt, time, width, height) {
+        const curl = getCurl(this.x, this.y, time);
+
+        const targetVx = (gx * 1.35 + curl.x * CONFIG.curlStrength * 0.08) * this.sensitivity;
+        let targetVy = 0;
+        if (CONFIG.gravityAxes === 'xy') {
+          targetVy = (gy * 1.35 + curl.y * CONFIG.curlStrength * 0.08) * this.sensitivity;
+        } else {
+          targetVy = (curl.y * CONFIG.curlStrength * 0.035) * this.sensitivity;
+        }
+
+        const steerStrength = 8.5;
+        this.ax = (targetVx - this.vx * 0.5) * steerStrength;
+        this.ay = (targetVy - this.vy * 0.5) * steerStrength;
+
+        this.vx += this.ax * dt;
+        this.vy += this.ay * dt;
+
+        const effectiveTau = Math.max(CONFIG.dampingTau * this.dampingFactor, 0.05);
+        const dampingFactor = Math.exp(-dt / effectiveTau);
+        this.vx *= dampingFactor;
+        this.vy *= dampingFactor;
+
+        if (this.maxHistory > 0) {
+          this.history.unshift({ x: this.x, y: this.y });
+          if (this.history.length > this.maxHistory) {
+            this.history.pop();
+          }
+        }
+
+        this.x += this.vx;
+        this.y += this.vy;
+
+        const padding = CONFIG.particleSize * 1.5;
+        if (this.x < padding) {
+          this.x = padding + Math.random() * 8;
+          this.vx = Math.abs(this.vx) * 0.35 + Math.random() * 0.15;
+        } else if (this.x > width - padding) {
+          this.x = width - padding - Math.random() * 8;
+          this.vx = -Math.abs(this.vx) * 0.35 - Math.random() * 0.15;
+        }
+
+        if (this.y < padding) {
+          this.y = padding + Math.random() * 8;
+          this.vy = Math.abs(this.vy) * 0.35 + Math.random() * 0.15;
+        } else if (this.y > height - padding) {
+          this.y = height - padding - Math.random() * 8;
+          this.vy = -Math.abs(this.vy) * 0.35 - Math.random() * 0.15;
+        }
+
+        this.sparklePhase += this.sparkleSpeed;
+      }
+
+      draw(ctx) {
+        const isProj = CONFIG.displayMode === 'projector';
+        const boost = isProj ? CONFIG.projectorBoost : 1.0;
+        const alphaBoost = isProj ? 1.30 : 1.0;
+
+        const speed = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
+        const baseRadius = CONFIG.particleSize * this.sizeScale * boost;
+        const sparkle = 0.8 + Math.sin(this.sparklePhase) * 0.2;
+
+        if (this.layer === 'bokeh') {
+          const glowRadius = baseRadius * 3.2;
+          const grad = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, glowRadius);
+          grad.addColorStop(0, this.color.halo);
+          grad.addColorStop(0.5, this.color.corona);
+          grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+
+          ctx.beginPath();
+          ctx.arc(this.x, this.y, glowRadius, 0, Math.PI * 2);
+          ctx.fillStyle = grad;
+          ctx.globalAlpha = clamp(this.alphaMultiplier * (0.8 + sparkle * 0.2) * (isProj ? 1.25 : 1.0), 0, 1);
+          ctx.fill();
+
+        } else if (this.layer === 'comet') {
+          if (this.history.length >= 2 && speed > 0.35) {
+            const len = this.history.length;
+            ctx.lineCap = 'round';
+            for (let i = 0; i < len - 1; i++) {
+              const pA = this.history[i];
+              const pB = this.history[i + 1];
+              const ratio = 1 - (i / len);
+
+              ctx.beginPath();
+              ctx.moveTo(pA.x, pA.y);
+              ctx.lineTo(pB.x, pB.y);
+              ctx.strokeStyle = this.color.corona;
+              ctx.lineWidth = baseRadius * (isProj ? 2.6 : 2.2) * ratio;
+              ctx.globalAlpha = clamp(this.alphaMultiplier * ratio * 0.45 * alphaBoost, 0, 1);
+              ctx.stroke();
+
+              ctx.beginPath();
+              ctx.moveTo(pA.x, pA.y);
+              ctx.lineTo(pB.x, pB.y);
+              ctx.strokeStyle = this.color.halo;
+              ctx.lineWidth = baseRadius * (isProj ? 1.3 : 1.1) * ratio;
+              ctx.globalAlpha = clamp(this.alphaMultiplier * ratio * 0.75 * alphaBoost, 0, 1);
+              ctx.stroke();
+            }
+          }
+
+          const glowRadius = baseRadius * (1.9 + sparkle * 0.5);
+          const grad = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, glowRadius);
+          grad.addColorStop(0, this.color.core);
+          grad.addColorStop(0.25, this.color.halo);
+          grad.addColorStop(0.70, this.color.corona);
+          grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+
+          ctx.beginPath();
+          ctx.arc(this.x, this.y, glowRadius, 0, Math.PI * 2);
+          ctx.fillStyle = grad;
+          ctx.globalAlpha = clamp(this.alphaMultiplier * sparkle * alphaBoost, 0, 1);
+          ctx.fill();
+
+        } else {
+          // stardust
+          const glowRadius = baseRadius * (1.8 + sparkle * 0.6);
+          const grad = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, glowRadius);
+          grad.addColorStop(0, this.color.core);
+          grad.addColorStop(0.4, this.color.halo);
+          grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+
+          ctx.beginPath();
+          ctx.arc(this.x, this.y, glowRadius, 0, Math.PI * 2);
+          ctx.fillStyle = grad;
+          ctx.globalAlpha = clamp(this.alphaMultiplier * sparkle * (isProj ? 1.35 : 1.0), 0, 1);
+          ctx.fill();
+        }
+      }
+    }
+
+    /**
+     * ParticleSystem
+     */
+    class ParticleSystem {
+      constructor(canvas) {
+        this.canvas = canvas;
+        this.ctx = canvas.getContext('2d');
+        this.particles = [];
+        this.frameCount = 0;
+        this._resizeScheduled = false;
+
+        this._doResize();
+        this.initParticles();
+
+        // すべてのリサイズ系イベントをデバウンスされた単一メソッドに統合
+        const onResize = () => this.scheduleResize();
+        window.addEventListener('resize', onResize);
+        window.addEventListener('orientationchange', onResize);
+        document.addEventListener('fullscreenchange', onResize);
+        document.addEventListener('webkitfullscreenchange', onResize);
+        if (window.visualViewport) {
+          window.visualViewport.addEventListener('resize', onResize);
+        }
+      }
+
+      /** デバウンスされたリサイズ要求（同一フレーム内の重複呼び出しを防止） */
+      scheduleResize() {
+        if (this._resizeScheduled) return;
+        this._resizeScheduled = true;
+        requestAnimationFrame(() => {
+          this._doResize();
+          this._resizeScheduled = false;
+        });
+      }
+
+      /** 実際のリサイズ処理 */
+      _doResize() {
+        const dpr = window.devicePixelRatio || 1;
+        const w = window.innerWidth || document.documentElement.clientWidth;
+        const h = window.innerHeight || document.documentElement.clientHeight;
+
+        const oldW = this.width || w;
+        const oldH = this.height || h;
+
+        this.width = w;
+        this.height = h;
+        this.canvas.width = Math.floor(w * dpr);
+        this.canvas.height = Math.floor(h * dpr);
+        this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+        // サイズ変更時に粒子座標を新しい画面サイズに比例スケーリング
+        if (this.particles && this.particles.length > 0 && Math.abs(h - oldH) > 4) {
+          const scaleX = oldW > 0 ? (w / oldW) : 1;
+          const scaleY = oldH > 0 ? (h / oldH) : 1;
+          for (const p of this.particles) {
+            p.x = clamp(p.x * scaleX, 10, w - 10);
+            p.y = clamp(p.y * scaleY, 10, h - 10);
+            if (p.history) {
+              for (const pt of p.history) {
+                pt.x = clamp(pt.x * scaleX, 10, w - 10);
+                pt.y = clamp(pt.y * scaleY, 10, h - 10);
+              }
+            }
+          }
+        }
+      }
+
+      initParticles() {
+        this.particles = [];
+        for (let i = 0; i < CONFIG.particleCount; i++) {
+          this.particles.push(new Particle(this.width, this.height));
+        }
+      }
+
+      applyTheme(themeKey) {
+        CONFIG.colorTheme = themeKey;
+        const theme = THEMES[themeKey] || THEMES.aurora;
+        for (const p of this.particles) {
+          p.color = theme.palettes[Math.floor(Math.random() * theme.palettes.length)];
+        }
+      }
+
+      adjustParticleCount() {
+        const current = this.particles.length;
+        const target = CONFIG.particleCount;
+        if (target > current) {
+          for (let i = 0; i < target - current; i++) {
+            this.particles.push(new Particle(this.width, this.height));
+          }
+        } else if (target < current) {
+          this.particles.splice(target, current - target);
+        }
+      }
+
+      updateAndDraw(gx, gy, dt, time) {
+        // 全画面切り替え等による画面サイズ変化を検出
+        const curW = window.innerWidth || document.documentElement.clientWidth;
+        const curH = window.innerHeight || document.documentElement.clientHeight;
+        if (Math.abs(curW - this.width) > 1 || Math.abs(curH - this.height) > 1) {
+          this._doResize();
+        }
+
+        this.adjustParticleCount();
+        this.frameCount++;
+
+        // 1. 粒子間近接反発（3フレームに1回で軽量化、視覚的に差異なし）
+        if (this.frameCount % 3 === 0) {
+          const minDist = CONFIG.particleSize * 2.4;
+          const minDistSq = minDist * minDist;
+          const len = this.particles.length;
+
+          for (let i = 0; i < len; i++) {
+            const p1 = this.particles[i];
+            for (let j = i + 1; j < len; j++) {
+              const p2 = this.particles[j];
+              const dx = p2.x - p1.x;
+              const dy = p2.y - p1.y;
+              const distSq = dx * dx + dy * dy;
+
+              if (distSq < minDistSq && distSq > 0.0001) {
+                const dist = Math.sqrt(distSq);
+                const overlap = (minDist - dist) / dist;
+                const pushX = dx * overlap * 0.07;
+                const pushY = dy * overlap * 0.07;
+
+                p1.x -= pushX;
+                p1.y -= pushY;
+                p2.x += pushX;
+                p2.y += pushY;
+              }
+            }
+          }
+        }
+
+        // 2. 残像減衰（プロジェクターの黒浮き対策込み）
+        const safeDt = Math.min(dt, 0.1);
+        const minFloor = CONFIG.displayMode === 'projector' ? 0.04 : 0.02;
+        const fadeAlpha = clamp(1.0 - Math.exp(-safeDt / CONFIG.trailTau), minFloor, 0.95);
+
+        const ctx = this.ctx;
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha = 1.0;
+        ctx.fillStyle = `rgba(0, 0, 0, ${fadeAlpha})`;
+        ctx.fillRect(0, 0, this.width, this.height);
+
+        // 3. アディティブブレンディング & 音響特徴量の集計
+        ctx.globalCompositeOperation = 'lighter';
+
+        let sumSpeed = 0;
+        let sumX = 0;
+        let sumY = 0;
+        let movingCount = 0;
+        let pooledCount = 0;
+        let maxEnergy = 0;
+        let salientParticle = null;
+
+        const edgeMargin = 85;
+
+        for (const p of this.particles) {
+          p.update(gx, gy, safeDt, time, this.width, this.height);
+          p.draw(ctx);
+
+          // 音響特徴量抽出
+          if (p.x < edgeMargin || p.x > this.width - edgeMargin) {
+            pooledCount++;
+          }
+
+          const spd = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
+          if (spd > 0.25) {
+            sumSpeed += spd;
+            sumX += p.x;
+            sumY += p.y;
+            movingCount++;
+
+            // 顕著イベント抽出
+            const energy = spd * 0.6 + Math.sqrt(p.ax * p.ax + p.ay * p.ay) * 0.05;
+            if (energy > maxEnergy && p.layer === 'comet' && p.x > edgeMargin && p.x < this.width - edgeMargin) {
+              maxEnergy = energy;
+              salientParticle = p;
+            }
+          }
+        }
+
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha = 1.0;
+
+        return {
+          meanSpeed: movingCount > 0 ? sumSpeed / movingCount : 0,
+          centroidX: movingCount > 0 ? (sumX / movingCount) / this.width : 0.5,
+          centroidY: movingCount > 0 ? (sumY / movingCount) / this.height : 0.5,
+          pooledRatio: pooledCount / this.particles.length,
+          maxEnergy,
+          salientParticle,
+          width: this.width,
+          height: this.height
+        };
+      }
+    }
+
+    /**
+     * AudioSystem (3階層流体音響エンジン: Macro / Meso / Micro)
+     * deep-research-report-2.md 準拠の完全再構築
+     */
+    class AudioSystem {
+      constructor() {
+        this.ctx = null;
+        this.masterGain = null;
+        this.reverbNode = null;
+        this.reverbSendGain = null;
+        this.initialized = false;
+
+        // Macro: 連続流体音（ピンクノイズ・バンドパス） & ドローン
+        this.streamNoiseSource = null;
+        this.streamFilter = null;
+        this.streamGain = null;
+        this.streamPanner = null;
+        this.droneOsc1 = null;
+        this.droneOsc2 = null;
+        this.droneGain = null;
+
+        // Meso: Granular 音響管理
+        this.lastGrainTime = 0;
+
+        // Micro: Modal 結晶ベル管理
+        this.activeModalVoices = 0;
+        this.maxModalVoices = 5;
+        this.lastChimeTime = 0;
+
+        // 状態平滑化
+        this.smoothMeanSpeed = 0;
+        this.smoothCentroidX = 0.5;
+        this.smoothDroneEnergy = 0.0;
+        this.edgePoolFade = 1.0;
+      }
+
+      init() {
+        if (this.initialized) return;
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        this.ctx = new AudioCtx({ latencyHint: 'interactive' });
+
+        // 1. マスターゲイン & リミッター
+        this.masterGain = this.ctx.createGain();
+        this.masterGain.gain.value = CONFIG.masterVolume;
+        this.masterGain.connect(this.ctx.destination);
+
+        // 2. ディフュージョン・空間リバーブ (Procedural Lush Reverb)
+        this.setupReverb();
+
+        // 3. Macro: 流体ストリーム・ノイズの構築
+        this.setupStreamNoise();
+
+        // 4. Macro: 和声アンビエント・ドローンの構築
+        this.setupAmbientDrone();
+
+        this.initialized = true;
+      }
+
+      setupReverb() {
+        try {
+          const convolver = this.ctx.createConvolver();
+          const sampleRate = this.ctx.sampleRate;
+          const length = sampleRate * 2.2;
+          const impulse = this.ctx.createBuffer(2, length, sampleRate);
+          const left = impulse.getChannelData(0);
+          const right = impulse.getChannelData(1);
+
+          for (let i = 0; i < length; i++) {
+            const t = i / sampleRate;
+            const env = Math.exp(-t * 2.5);
+            left[i] = (Math.random() * 2 - 1) * env;
+            right[i] = (Math.random() * 2 - 1) * env;
+          }
+          convolver.buffer = impulse;
+
+          this.reverbSendGain = this.ctx.createGain();
+          this.reverbSendGain.gain.value = 0.35;
+
+          const reverbFilter = this.ctx.createBiquadFilter();
+          reverbFilter.type = 'lowpass';
+          reverbFilter.frequency.value = 3200;
+
+          this.reverbSendGain.connect(convolver);
+          convolver.connect(reverbFilter);
+          reverbFilter.connect(this.masterGain);
+        } catch (e) {
+          console.warn('Reverb setup failed, using dry fallback', e);
+        }
+      }
+
+      setupStreamNoise() {
+        // プロシージャル・ピンクノイズバッファの生成 (2.0s loop)
+        const sampleRate = this.ctx.sampleRate;
+        const bufferSize = sampleRate * 2.0;
+        const buffer = this.ctx.createBuffer(1, bufferSize, sampleRate);
+        const data = buffer.getChannelData(0);
+        let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+
+        for (let i = 0; i < bufferSize; i++) {
+          const white = Math.random() * 2 - 1;
+          b0 = 0.99886 * b0 + white * 0.0555179;
+          b1 = 0.99332 * b1 + white * 0.0750759;
+          b2 = 0.96900 * b2 + white * 0.1538520;
+          b3 = 0.86650 * b3 + white * 0.3104856;
+          b4 = 0.55000 * b4 + white * 0.5329522;
+          b5 = -0.7616 * b5 - white * 0.0168980;
+          data[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362) * 0.12;
+          b6 = white * 0.115926;
+        }
+
+        this.streamNoiseSource = this.ctx.createBufferSource();
+        this.streamNoiseSource.buffer = buffer;
+        this.streamNoiseSource.loop = true;
+
+        this.streamFilter = this.ctx.createBiquadFilter();
+        this.streamFilter.type = 'bandpass';
+        this.streamFilter.frequency.value = 450;
+        this.streamFilter.Q.value = 1.3;
+
+        this.streamGain = this.ctx.createGain();
+        this.streamGain.gain.value = 0.0001; // 初期状態は完全沈黙
+
+        this.streamPanner = this.ctx.createStereoPanner ? this.ctx.createStereoPanner() : null;
+
+        this.streamNoiseSource.connect(this.streamFilter);
+        this.streamFilter.connect(this.streamGain);
+
+        if (this.streamPanner) {
+          this.streamGain.connect(this.streamPanner);
+          this.streamPanner.connect(this.masterGain);
+          if (this.reverbSendGain) this.streamPanner.connect(this.reverbSendGain);
+        } else {
+          this.streamGain.connect(this.masterGain);
+          if (this.reverbSendGain) this.streamGain.connect(this.reverbSendGain);
+        }
+
+        this.streamNoiseSource.start();
+      }
+
+      setupAmbientDrone() {
+        // 和声空間を静かに支えるソフトなアンビエントドローン (Root C3=130.81Hz & 5th G3=196.0Hz)
+        this.droneOsc1 = this.ctx.createOscillator();
+        this.droneOsc2 = this.ctx.createOscillator();
+        this.droneOsc1.type = 'sine';
+        this.droneOsc2.type = 'sine';
+        this.droneOsc1.frequency.value = 130.81;
+        this.droneOsc2.frequency.value = 196.00;
+
+        const droneFilter = this.ctx.createBiquadFilter();
+        droneFilter.type = 'lowpass';
+        droneFilter.frequency.value = 350;
+
+        this.droneGain = this.ctx.createGain();
+        this.droneGain.gain.value = 0.0001; // 初期状態は完全沈黙（常時鳴りっぱなしを廃止）
+
+        this.droneOsc1.connect(droneFilter);
+        this.droneOsc2.connect(droneFilter);
+        droneFilter.connect(this.droneGain);
+        this.droneGain.connect(this.masterGain);
+
+        this.droneOsc1.start();
+        this.droneOsc2.start();
+      }
+
+      resume() {
+        if (this.ctx && this.ctx.state === 'suspended') {
+          this.ctx.resume();
+        }
+      }
+
+      updateVolume() {
+        if (this.masterGain) {
+          this.masterGain.gain.setTargetAtTime(CONFIG.masterVolume, this.ctx.currentTime, 0.05);
+        }
+      }
+
+      getScaleFrequencies() {
+        if (CONFIG.pitchScale === 'major') {
+          return [
+            130.81, 146.83, 164.81, 174.61, 196.00, 220.00, 246.94,
+            261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 493.88,
+            523.25, 587.33, 659.25, 783.99, 880.00, 1046.50
+          ];
+        } else if (CONFIG.pitchScale === 'crystal') {
+          return [
+            523.25, 659.25, 783.99, 1046.50, 1318.51, 1567.98, 2093.00, 2637.02
+          ];
+        } else {
+          // ペンタトニック（最も調和が高く心地よい）
+          return [
+            130.81, 146.83, 164.81, 196.00, 220.00,
+            261.63, 293.66, 329.63, 392.00, 440.00,
+            523.25, 587.33, 659.25, 783.99, 880.00,
+            1046.50, 1174.66, 1318.51
+          ];
+        }
+      }
+
+      getFrequencyForY(normY) {
+        const freqs = this.getScaleFrequencies();
+        const index = Math.floor((1 - normY) * (freqs.length - 1));
+        const clampedIndex = clamp(index, 0, freqs.length - 1);
+        return freqs[clampedIndex];
+      }
+
+      // Meso: Granular音粒の生成（流速に連動する水泡・光のせせらぎ）
+      triggerGrain(centroidX, normY, speed) {
+        const now = this.ctx.currentTime;
+        const freqs = this.getScaleFrequencies();
+        const baseFreq = freqs[Math.min(Math.floor(freqs.length * 0.45 + Math.random() * freqs.length * 0.5), freqs.length - 1)];
+
+        const osc = this.ctx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(baseFreq, now);
+
+        const grainGain = this.ctx.createGain();
+        const grainDuration = 0.05 + Math.random() * 0.04;
+        const vol = (0.015 + speed * 0.012) * this.edgePoolFade * CONFIG.streamVolume;
+
+        grainGain.gain.setValueAtTime(0.0001, now);
+        grainGain.gain.linearRampToValueAtTime(vol, now + grainDuration * 0.3);
+        grainGain.gain.exponentialRampToValueAtTime(0.0001, now + grainDuration);
+
+        const panner = this.ctx.createStereoPanner ? this.ctx.createStereoPanner() : null;
+        if (panner) {
+          const jitter = (Math.random() - 0.5) * 0.35;
+          const panVal = clamp((centroidX - 0.5) * 2.0 + jitter, -1.0, 1.0);
+          panner.pan.setValueAtTime(panVal, now);
+        }
+
+        osc.connect(grainGain);
+        if (panner) {
+          grainGain.connect(panner);
+          panner.connect(this.masterGain);
+          if (this.reverbSendGain) panner.connect(this.reverbSendGain);
+        } else {
+          grainGain.connect(this.masterGain);
+          if (this.reverbSendGain) grainGain.connect(this.reverbSendGain);
+        }
+
+        osc.start(now);
+        osc.stop(now + grainDuration + 0.05);
+      }
+
+      // Micro: Modal 結晶ベル合成（非整数倍音レゾネータによる澄み切った余韻）
+      triggerModalChime(normX, normY, energy) {
+        if (this.activeModalVoices >= this.maxModalVoices) return;
+
+        this.activeModalVoices++;
+        const now = this.ctx.currentTime;
+        const f0 = this.getFrequencyForY(normY);
+
+        const partials = [
+          { ratio: 1.000, gain: 0.24, decay: 1.20 },
+          { ratio: 2.756, gain: 0.09, decay: 0.65 },
+          { ratio: 5.404, gain: 0.03, decay: 0.35 }
+        ];
+
+        const panner = this.ctx.createStereoPanner ? this.ctx.createStereoPanner() : null;
+        if (panner) {
+          const panVal = clamp((normX - 0.5) * 2.0, -1.0, 1.0);
+          panner.pan.setValueAtTime(panVal, now);
+        }
+
+        const voiceGain = this.ctx.createGain();
+        const baseVol = Math.min(0.2 + energy * 0.08, 0.55) * this.edgePoolFade;
+        voiceGain.gain.setValueAtTime(baseVol, now);
+
+        if (panner) {
+          voiceGain.connect(panner);
+          panner.connect(this.masterGain);
+          if (this.reverbSendGain) panner.connect(this.reverbSendGain);
+        } else {
+          voiceGain.connect(this.masterGain);
+          if (this.reverbSendGain) voiceGain.connect(this.reverbSendGain);
+        }
+
+        partials.forEach((p) => {
+          const osc = this.ctx.createOscillator();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(f0 * p.ratio, now);
+
+          const partGain = this.ctx.createGain();
+          partGain.gain.setValueAtTime(0.001, now);
+          partGain.gain.linearRampToValueAtTime(p.gain, now + 0.012);
+          partGain.gain.exponentialRampToValueAtTime(0.0001, now + p.decay);
+
+          osc.connect(partGain);
+          partGain.connect(voiceGain);
+
+          osc.start(now);
+          osc.stop(now + p.decay + 0.1);
+        });
+
+        setTimeout(() => {
+          this.activeModalVoices = Math.max(0, this.activeModalVoices - 1);
+        }, 1250);
+      }
+
+      processFrame(metrics) {
+        if (!this.initialized) return;
+
+        const now = this.ctx.currentTime;
+
+        // 1. 左右端蓄積フェード計算 (50%以上集結で滑らかにフェードアウト)
+        let targetFade = 1.0;
+        if (metrics.pooledRatio > 0.45) {
+          targetFade = Math.max(0.0, 1.0 - (metrics.pooledRatio - 0.45) / 0.45);
+        }
+        this.edgePoolFade += (targetFade - this.edgePoolFade) * 0.08;
+
+        // 2. 指数平滑化された大局メトリクス
+        this.smoothMeanSpeed += (metrics.meanSpeed - this.smoothMeanSpeed) * 0.12;
+        this.smoothCentroidX += (metrics.centroidX - this.smoothCentroidX) * 0.10;
+
+        // 3. 動的運動エネルギーの算出（傾きや粒子の流れの活発度）
+        const rawMotionEnergy = clamp(metrics.meanSpeed / 1.6 + Math.abs(this.smoothCentroidX - 0.5) * 1.2, 0.0, 1.0);
+
+        // 動かすとゆっくりフェードイン、傾きがなくなると極めてゆっくりフェードアウト
+        if (rawMotionEnergy > 0.08) {
+          this.smoothDroneEnergy += (rawMotionEnergy - this.smoothDroneEnergy) * 0.04;
+        } else {
+          this.smoothDroneEnergy += (0.0 - this.smoothDroneEnergy) * 0.006;
+        }
+
+        // 4. Macro Layer: ドローンの動的エンベロープ
+        if (this.droneGain) {
+          const droneVol = (this.smoothDroneEnergy * 0.045) * this.edgePoolFade * CONFIG.streamVolume;
+          this.droneGain.gain.setTargetAtTime(droneVol, now, 0.15);
+        }
+
+        // 5. Macro Layer: 流体ストリーム音の変調
+        if (this.streamGain && this.streamFilter) {
+          const streamEnergy = Math.min(this.smoothMeanSpeed / 2.5, 1.0);
+          const targetCutoff = 320 + streamEnergy * 2800;
+          const targetVol = (streamEnergy * 0.32) * this.edgePoolFade * CONFIG.streamVolume;
+
+          this.streamFilter.frequency.setTargetAtTime(targetCutoff, now, 0.08);
+          this.streamGain.gain.setTargetAtTime(targetVol, now, 0.08);
+
+          if (this.streamPanner) {
+            const panVal = clamp((this.smoothCentroidX - 0.5) * 1.8, -1.0, 1.0);
+            this.streamPanner.pan.setTargetAtTime(panVal, now, 0.08);
+          }
+        }
+
+        // 6. Meso Layer: Granular せせらぎ合成
+        if (this.smoothMeanSpeed > 0.35 && this.edgePoolFade > 0.1) {
+          const grainInterval = Math.max(0.025, 0.14 - this.smoothMeanSpeed * 0.04);
+          if (now - this.lastGrainTime > grainInterval) {
+            this.triggerGrain(this.smoothCentroidX, metrics.centroidY, this.smoothMeanSpeed);
+            this.lastGrainTime = now;
+          }
+        }
+
+        // 7. Micro Layer: 顕著イベントに限定した Modal 結晶ベル発音
+        if (metrics.salientParticle && this.edgePoolFade > 0.15) {
+          const chimeInterval = Math.max(0.18, 0.65 - CONFIG.soundDensity * 0.5);
+          if (now - this.lastChimeTime > chimeInterval && metrics.maxEnergy > 1.2) {
+            const normX = metrics.salientParticle.x / metrics.width;
+            const normY = metrics.salientParticle.y / metrics.height;
+            this.triggerModalChime(normX, normY, metrics.maxEnergy);
+            this.lastChimeTime = now;
+          }
+        }
+      }
+    }
+
+    /**
+     * App - メインアプリケーションコントローラ
+     */
+    class App {
+      constructor() {
+        this.canvas = document.getElementById('stage');
+        this.gravity = new VirtualGravity();
+        this.particleSystem = new ParticleSystem(this.canvas);
+        this.audioSystem = new AudioSystem();
+
+        // デバッグ表示用DOM要素をキャッシュ（毎フレームのgetElementById呼び出しを排除）
+        this._debugGx = document.getElementById('debug-gx');
+        this._debugGy = document.getElementById('debug-gy');
+
+        this.lastTime = 0;
+        this.time = 0;
+
+        this.initUI();
+        requestAnimationFrame((ts) => this.loop(ts));
+      }
+
+      initUI() {
+        const overlay = document.getElementById('start-overlay');
+        const btnStart = document.getElementById('btn-start');
+
+        const toggleFullscreen = () => {
+          const el = document.documentElement;
+          const isFull = !!(document.fullscreenElement || document.webkitFullscreenElement);
+          if (!isFull) {
+            if (el.requestFullscreen) {
+              el.requestFullscreen().catch(() => {});
+            } else if (el.webkitRequestFullscreen) {
+              el.webkitRequestFullscreen();
+            }
+          } else {
+            if (document.exitFullscreen) {
+              document.exitFullscreen().catch(() => {});
+            } else if (document.webkitExitFullscreen) {
+              document.webkitExitFullscreen();
+            }
+          }
+          // リサイズはParticleSystemのfullscreenchangeリスナー(scheduleResize)で自動処理
+        };
+
+        const startApp = async () => {
+          // 最優先: ユーザー操作スタック直下で同期的に Web Audio をアンロック
+          this.audioSystem.init();
+          this.audioSystem.resume();
+          overlay.classList.add('hidden');
+
+          if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+            try {
+              const permissionState = await DeviceOrientationEvent.requestPermission();
+              if (permissionState !== 'granted') {
+                console.warn('DeviceOrientation permission denied');
+              }
+            } catch (err) {
+              console.error(err);
+            }
+          }
+        };
+
+        btnStart.addEventListener('click', startApp);
+        overlay.addEventListener('click', startApp);
+
+        // タッチやクリック時にも確実に Web Audio をレジューム
+        const unlockAudio = () => this.audioSystem.resume();
+        window.addEventListener('pointerdown', unlockAudio, { passive: true });
+        window.addEventListener('touchstart', unlockAudio, { passive: true });
+
+        // 全画面トグルボタン
+        const fullscreenToggle = document.getElementById('fullscreen-toggle');
+        const btnToggleFullscreen = document.getElementById('btn-toggle-fullscreen');
+
+        const onFullscreenClick = () => {
+          toggleFullscreen();
+          this.audioSystem.resume();
+        };
+        if (fullscreenToggle) fullscreenToggle.addEventListener('click', onFullscreenClick);
+        if (btnToggleFullscreen) btnToggleFullscreen.addEventListener('click', onFullscreenClick);
+
+        // 設定パネル
+        const settingsToggle = document.getElementById('settings-toggle');
+        const settingsPanel = document.getElementById('settings-panel');
+        const btnCloseSettings = document.getElementById('btn-close-settings');
+
+        settingsToggle.addEventListener('click', () => settingsPanel.classList.toggle('open'));
+        btnCloseSettings.addEventListener('click', () => settingsPanel.classList.remove('open'));
+
+        // 設定パネル内のポインター操作が仮想重力に干渉するのを防止
+        for (const evt of ['pointerdown', 'pointermove', 'pointerup']) {
+          settingsPanel.addEventListener(evt, (e) => e.stopPropagation());
+        }
+
+        // スライダーバインド
+        const bindSlider = (elementId, displayId, configKey, isFloat = true) => {
+          const el = document.getElementById(elementId);
+          const display = document.getElementById(displayId);
+          el.addEventListener('input', (e) => {
+            const val = isFloat ? parseFloat(e.target.value) : parseInt(e.target.value, 10);
+            CONFIG[configKey] = val;
+            display.textContent = isFloat ? val.toFixed(2) : val;
+            if (configKey === 'masterVolume') {
+              this.audioSystem.updateVolume();
+            }
+          });
+        };
+
+        bindSlider('param-projector-boost', 'val-projector-boost', 'projectorBoost', true);
+        bindSlider('param-tilt-sensitivity', 'val-tilt-sensitivity', 'tiltSensitivity', true);
+        bindSlider('param-curl-strength', 'val-curl-strength', 'curlStrength', true);
+        bindSlider('param-flow-scale', 'val-flow-scale', 'flowScale', true);
+        bindSlider('param-trail-tau', 'val-trail-tau', 'trailTau', true);
+        bindSlider('param-particle-count', 'val-particle-count', 'particleCount', false);
+        bindSlider('param-particle-size', 'val-particle-size', 'particleSize', false);
+        bindSlider('param-master-volume', 'val-master-volume', 'masterVolume', true);
+        bindSlider('param-stream-volume', 'val-stream-volume', 'streamVolume', true);
+        bindSlider('param-sound-density', 'val-sound-density', 'soundDensity', true);
+
+        // セレクトボックス
+        const selectDisplayMode = document.getElementById('select-display-mode');
+        const itemProjectorBoost = document.getElementById('item-projector-boost');
+        selectDisplayMode.value = CONFIG.displayMode;
+        selectDisplayMode.addEventListener('change', (e) => {
+          CONFIG.displayMode = e.target.value;
+          itemProjectorBoost.style.display = (CONFIG.displayMode === 'projector') ? 'block' : 'none';
+        });
+
+        document.getElementById('select-color-theme').addEventListener('change', (e) => {
+          this.particleSystem.applyTheme(e.target.value);
+        });
+
+        document.getElementById('select-input-mode').addEventListener('change', (e) => {
+          CONFIG.inputMode = e.target.value;
+        });
+
+        document.getElementById('select-gravity-axes').addEventListener('change', (e) => {
+          CONFIG.gravityAxes = e.target.value;
+        });
+
+        document.getElementById('select-pitch-scale').addEventListener('change', (e) => {
+          CONFIG.pitchScale = e.target.value;
+        });
+      }
+
+      loop(timestamp) {
+        if (!this.lastTime) this.lastTime = timestamp;
+        const dt = (timestamp - this.lastTime) / 1000;
+        this.lastTime = timestamp;
+        this.time += dt;
+
+        this.gravity.update();
+
+        const metrics = this.particleSystem.updateAndDraw(this.gravity.gx, this.gravity.gy, dt, this.time);
+        this.audioSystem.processFrame(metrics);
+
+        // デバッグ表示更新（キャッシュ済みDOM参照を使用）
+        this._debugGx.textContent = this.gravity.gx.toFixed(2);
+        this._debugGy.textContent = (CONFIG.gravityAxes === 'x-only') ? '0.00 (固定)' : this.gravity.gy.toFixed(2);
+
+        requestAnimationFrame((ts) => this.loop(ts));
+      }
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      new App();
+    });
+  </script>
+</body>
+</html>
