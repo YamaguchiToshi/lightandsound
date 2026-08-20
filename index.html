@@ -1749,6 +1749,14 @@
         this._debugGy = document.getElementById('debug-gy');
         this._debugSwitch = document.getElementById('debug-switch');
 
+        // 保存済み設定の復元
+        try {
+          const saved = localStorage.getItem('lightandsound_config');
+          if (saved) {
+            Object.assign(CONFIG, JSON.parse(saved));
+          }
+        } catch (e) {}
+
         this.lastTime = 0;
         this.time = 0;
 
@@ -1785,14 +1793,17 @@
           this.audioSystem.resume();
           overlay.classList.add('hidden');
 
-          if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-            try {
-              const permissionState = await DeviceOrientationEvent.requestPermission();
-              if (permissionState !== 'granted') {
-                console.warn('DeviceOrientation permission denied');
+          // スイッチ専用またはポインター専用モードの場合は傾きセンサー許可ダイアログをスキップ
+          if (CONFIG.inputMode !== 'pointer' && CONFIG.inputMode !== 'switch') {
+            if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+              try {
+                const permissionState = await DeviceOrientationEvent.requestPermission();
+                if (permissionState !== 'granted') {
+                  console.warn('DeviceOrientation permission denied');
+                }
+              } catch (err) {
+                console.error(err);
               }
-            } catch (err) {
-              console.error(err);
             }
           }
         };
@@ -1838,11 +1849,21 @@
           settingsPanel.addEventListener(evt, (e) => e.stopPropagation());
         }
 
+        // 設定のローカルストレージ保存関数
+        const saveConfig = () => {
+          try {
+            localStorage.setItem('lightandsound_config', JSON.stringify(CONFIG));
+          } catch (e) {}
+        };
+
         // スライダーバインド
         const bindSlider = (elementId, displayId, configKey, isFloat = true) => {
           const el = document.getElementById(elementId);
           const display = document.getElementById(displayId);
           if (!el || !display) return;
+          el.value = CONFIG[configKey];
+          display.textContent = isFloat ? CONFIG[configKey].toFixed(2) : CONFIG[configKey];
+
           el.addEventListener('input', (e) => {
             const val = isFloat ? parseFloat(e.target.value) : parseInt(e.target.value, 10);
             CONFIG[configKey] = val;
@@ -1850,6 +1871,7 @@
             if (configKey === 'masterVolume') {
               this.audioSystem.updateVolume();
             }
+            saveConfig();
           });
         };
 
@@ -1868,39 +1890,65 @@
         // セレクトボックス
         const selectDisplayMode = document.getElementById('select-display-mode');
         const itemProjectorBoost = document.getElementById('item-projector-boost');
-        selectDisplayMode.value = CONFIG.displayMode;
-        selectDisplayMode.addEventListener('change', (e) => {
-          CONFIG.displayMode = e.target.value;
-          itemProjectorBoost.style.display = (CONFIG.displayMode === 'projector') ? 'block' : 'none';
-        });
+        if (selectDisplayMode) {
+          selectDisplayMode.value = CONFIG.displayMode;
+          if (itemProjectorBoost) itemProjectorBoost.style.display = (CONFIG.displayMode === 'projector') ? 'block' : 'none';
+          selectDisplayMode.addEventListener('change', (e) => {
+            CONFIG.displayMode = e.target.value;
+            if (itemProjectorBoost) itemProjectorBoost.style.display = (CONFIG.displayMode === 'projector') ? 'block' : 'none';
+            saveConfig();
+          });
+        }
 
         const selectSwitchMode = document.getElementById('select-switch-mode');
         const itemSwitchPulse = document.getElementById('item-switch-pulse');
         if (selectSwitchMode) {
           selectSwitchMode.value = CONFIG.switchMode;
+          if (itemSwitchPulse) itemSwitchPulse.style.display = (CONFIG.switchMode === 'hold') ? 'none' : 'block';
           selectSwitchMode.addEventListener('change', (e) => {
             CONFIG.switchMode = e.target.value;
             if (itemSwitchPulse) {
               itemSwitchPulse.style.display = (CONFIG.switchMode === 'hold') ? 'none' : 'block';
             }
+            saveConfig();
           });
         }
 
-        document.getElementById('select-color-theme').addEventListener('change', (e) => {
-          this.particleSystem.applyTheme(e.target.value);
-        });
+        const selectTheme = document.getElementById('select-color-theme');
+        if (selectTheme) {
+          selectTheme.value = CONFIG.colorTheme;
+          selectTheme.addEventListener('change', (e) => {
+            this.particleSystem.applyTheme(e.target.value);
+            saveConfig();
+          });
+        }
 
-        document.getElementById('select-input-mode').addEventListener('change', (e) => {
-          CONFIG.inputMode = e.target.value;
-        });
+        const selectInputMode = document.getElementById('select-input-mode');
+        if (selectInputMode) {
+          selectInputMode.value = CONFIG.inputMode;
+          selectInputMode.addEventListener('change', (e) => {
+            CONFIG.inputMode = e.target.value;
+            saveConfig();
+          });
+        }
 
-        document.getElementById('select-gravity-axes').addEventListener('change', (e) => {
-          CONFIG.gravityAxes = e.target.value;
-        });
+        const selectAxes = document.getElementById('select-gravity-axes');
+        if (selectAxes) {
+          selectAxes.value = CONFIG.gravityAxes;
+          selectAxes.addEventListener('change', (e) => {
+            CONFIG.gravityAxes = e.target.value;
+            saveConfig();
+          });
+        }
 
-        document.getElementById('select-pitch-scale').addEventListener('change', (e) => {
-          CONFIG.pitchScale = e.target.value;
-        });
+        const selectPitch = document.getElementById('select-pitch-scale');
+        if (selectPitch) {
+          selectPitch.value = CONFIG.pitchScale;
+          selectPitch.addEventListener('change', (e) => {
+            CONFIG.pitchScale = e.target.value;
+            saveConfig();
+          });
+        }
       }
 
       loop(timestamp) {
