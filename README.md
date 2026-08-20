@@ -20,11 +20,19 @@
 
 ---
 
-## 起動方法
+## 公開URL (GitHub Pages)
 
-### ローカルHTTPSサーバーの起動 (iPad実機検証用)
+iPadや各種端末のブラウザ（Safari等）からアクセスしてすぐに体験できます：
 
-iPad Safariで傾斜センサー（`DeviceOrientation`）と Web Audio API を利用するには、安全なコンテキスト（HTTPS）が必要です。
+👉 **[https://yamaguchitoshi.github.io/lightandsound/](https://yamaguchitoshi.github.io/lightandsound/)**
+
+※ 正規HTTPS環境のため、証明書警告なしでそのまま傾斜センサー・Web Audio・PWA（ホーム画面に追加）が利用できます。
+
+---
+
+## 起動方法 (ローカル開発時)
+
+### ローカルHTTPSサーバーの起動 (ローカル検証用)
 
 ```bash
 # Python 3 によるローカルHTTPSサーバー起動 (ポート 8443)
@@ -33,8 +41,8 @@ python3 serve_https.py 8443
 
 ### iPadでのアクセスと全画面化
 
-1. iPadのSafariで `https://<PCのローカルIP>:8443/` にアクセスします。
-2. 画面中央の **「画面に触れてスタート」** をタップします。
+1. iPadのSafariで `https://yamaguchitoshi.github.io/lightandsound/`（またはローカルIP）にアクセスします。
+2. 画面中央の **「画面に触れてスタート」** をタップ（またはスイッチでSpace/Enterを押下）。
 3. **完全全画面（アドレスバーなし）にする場合**:
    - Safariの共有メニュー（􀈂）から **「ホーム画面に追加」** を選択し、作成されたアイコンから起動します。
 
