@@ -296,7 +296,42 @@
       font-family: monospace;
       font-size: 0.82rem;
       color: #00ffcc;
-      line-height: 1.4;
+      line-height: 1.5;
+    }
+
+    .switch-badge {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.1);
+      color: #8899aa;
+      font-size: 0.76rem;
+      transition: all 0.15s ease;
+    }
+
+    .switch-badge.active-left {
+      background: rgba(255, 120, 0, 0.35);
+      color: #ffaa33;
+      border: 1px solid #ff9933;
+      box-shadow: 0 0 8px rgba(255, 150, 0, 0.4);
+    }
+
+    .switch-badge.active-right {
+      background: rgba(0, 240, 255, 0.35);
+      color: #00f0ff;
+      border: 1px solid #00f0ff;
+      box-shadow: 0 0 8px rgba(0, 240, 255, 0.4);
+    }
+
+    .switch-guide {
+      margin-top: 14px;
+      padding: 12px;
+      background: rgba(0, 240, 255, 0.08);
+      border: 1px solid rgba(0, 240, 255, 0.3);
+      border-radius: 8px;
+      font-size: 0.80rem;
+      color: #bfefff;
+      line-height: 1.5;
     }
 
     .projector-tip {
@@ -319,7 +354,7 @@
   <!-- 起動オーバーレイ -->
   <div id="start-overlay">
     <button class="start-button" id="btn-start">画面に触れてスタート</button>
-    <div class="start-subtext">音と光のインタラクティブ環境 v0.4 (Projector & Fluid Engine)</div>
+    <div class="start-subtext">画面タップ、またはスイッチ（Space / Enter）で開始</div>
   </div>
 
   <!-- 右上コントロール（全画面 ＆ 設定） -->
@@ -367,10 +402,25 @@
     <div class="setting-item">
       <label>入力モード</label>
       <select id="select-input-mode">
-        <option value="both">傾斜 + ポインター（自動合成）</option>
+        <option value="both">すべて合成（傾斜 ＋ スイッチ ＋ タッチ）</option>
+        <option value="switch">スイッチ専用（Space=右 / Enter=左）</option>
         <option value="tilt">iPadの傾斜のみ</option>
         <option value="pointer">ポインター／タッチのみ</option>
       </select>
+    </div>
+
+    <div class="setting-item">
+      <label>スイッチ応答モード (Switch Mode)</label>
+      <select id="select-switch-mode">
+        <option value="hybrid">長押し連動 ＋ 単押しパルス維持 (推奨)</option>
+        <option value="hold">長押し中のみ傾斜 (Hold)</option>
+        <option value="pulse">ワンプッシュで一定時間流れる (Pulse)</option>
+      </select>
+    </div>
+
+    <div class="setting-item" id="item-switch-pulse">
+      <label>スイッチ維持時間 (Pulse Duration) <span id="val-switch-pulse-duration">1.2</span>s</label>
+      <input type="range" id="param-switch-pulse-duration" min="0.4" max="3.0" step="0.1" value="1.2">
     </div>
 
     <div class="setting-item">
@@ -438,7 +488,16 @@
     <div class="virtual-gravity-debug">
       Virtual Gravity:<br>
       X: <span id="debug-gx">0.00</span> | Y: <span id="debug-gy">0.00</span><br>
+      Switch: <span id="debug-switch" class="switch-badge">OFF</span><br>
       Audio: 3-Tier Granular & Modal Engine
+    </div>
+
+    <div class="switch-guide">
+      🕹️ <b>スイッチ入力対応</b>:<br>
+      ・<b>Spaceキー</b>: 右に傾ける（右方向へ光が流れる）<br>
+      ・<b>Enterキー</b>: 左に傾ける（左方向へ光が流れる）<br>
+      ・<b>矢印キー (← / →)</b> でも同様に操作可能です。<br>
+      ※ 画面開始時もSpaceまたはEnterを押すだけでスタートできます。
     </div>
 
     <div class="projector-tip">
@@ -529,7 +588,9 @@
     const CONFIG = {
       displayMode: 'projector', // 'projector': 会議室プロジェクター・大画面向け / 'standard': iPad画面向け
       projectorBoost: 1.40,     // プロジェクター視認性・粒子サイズ倍率
-      inputMode: 'both',
+      inputMode: 'both',        // 'both', 'switch', 'tilt', 'pointer'
+      switchMode: 'hybrid',     // 'hybrid' (推奨), 'hold', 'pulse'
+      switchPulseDuration: 1.2, // スイッチ単押し時の重力維持時間(秒)
       gravityAxes: 'x-only',
       colorTheme: 'aurora',
       tiltSensitivity: 2.2,
@@ -651,7 +712,7 @@
     }
 
     /**
-     * Virtual Gravity
+     * Virtual Gravity - 傾斜・ポインター・スイッチ（Space/Enter）による仮想重力合成
      */
     class VirtualGravity {
       constructor() {
@@ -661,17 +722,35 @@
         this.tiltGy = 0.0;
         this.pointerGx = 0.0;
         this.pointerGy = 0.0;
+        this.switchGx = 0.0;
+        this.switchGy = 0.0;
 
         this.pointerActive = false;
         this.pointerX = 0;
         this.pointerY = 0;
 
+        this.switchKeys = {
+          left: false,   // Enter または ArrowLeft
+          right: false,  // Space または ArrowRight
+          up: false,     // ArrowUp
+          down: false    // ArrowDown
+        };
+
+        this.pulseState = {
+          active: false,
+          direction: null,
+          startTime: 0
+        };
+
+        this.activeSwitchLabel = 'OFF';
+
         this.initListeners();
       }
 
       initListeners() {
+        // 1. 傾斜センサー (DeviceOrientation)
         window.addEventListener('deviceorientation', (e) => {
-          if (CONFIG.inputMode === 'pointer') return;
+          if (CONFIG.inputMode === 'pointer' || CONFIG.inputMode === 'switch') return;
 
           let gamma = e.gamma || 0;
           let beta = e.beta || 0;
@@ -710,6 +789,7 @@
           this.tiltGy = normGy * CONFIG.tiltSensitivity;
         });
 
+        // 2. ポインター／タッチ操作
         const updatePointerGravity = (clientX, clientY) => {
           const cx = window.innerWidth / 2;
           const cy = window.innerHeight / 2;
@@ -718,14 +798,14 @@
         };
 
         window.addEventListener('pointermove', (e) => {
-          if (CONFIG.inputMode === 'tilt') return;
+          if (CONFIG.inputMode === 'tilt' || CONFIG.inputMode === 'switch') return;
           if (e.target && e.target.closest && e.target.closest('#settings-panel, .top-controls, #start-overlay')) return;
           updatePointerGravity(e.clientX, e.clientY);
           this.pointerActive = true;
         });
 
         window.addEventListener('pointerdown', (e) => {
-          if (CONFIG.inputMode === 'tilt') return;
+          if (CONFIG.inputMode === 'tilt' || CONFIG.inputMode === 'switch') return;
           if (e.target && e.target.closest && e.target.closest('#settings-panel, .top-controls, #start-overlay')) return;
           updatePointerGravity(e.clientX, e.clientY);
           this.pointerActive = true;
@@ -734,12 +814,139 @@
         window.addEventListener('pointerup', () => {
           this.pointerActive = false;
         });
+
+        // 3. スイッチインターフェース／キーボード操作 (Space=右 / Enter=左)
+        window.addEventListener('keydown', (e) => {
+          if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA')) {
+            return;
+          }
+
+          const now = performance.now() / 1000;
+          let handled = false;
+
+          if (e.code === 'Space' || e.key === ' ' || e.key === 'Spacebar' || e.keyCode === 32) {
+            this.switchKeys.right = true;
+            this.pulseState = { active: true, direction: 'right', startTime: now };
+            handled = true;
+          } else if (e.code === 'Enter' || e.key === 'Enter' || e.keyCode === 13) {
+            this.switchKeys.left = true;
+            this.pulseState = { active: true, direction: 'left', startTime: now };
+            handled = true;
+          } else if (e.code === 'ArrowRight' || e.key === 'ArrowRight') {
+            this.switchKeys.right = true;
+            this.pulseState = { active: true, direction: 'right', startTime: now };
+            handled = true;
+          } else if (e.code === 'ArrowLeft' || e.key === 'ArrowLeft') {
+            this.switchKeys.left = true;
+            this.pulseState = { active: true, direction: 'left', startTime: now };
+            handled = true;
+          } else if (e.code === 'ArrowUp' || e.key === 'ArrowUp') {
+            this.switchKeys.up = true;
+            handled = true;
+          } else if (e.code === 'ArrowDown' || e.key === 'ArrowDown') {
+            this.switchKeys.down = true;
+            handled = true;
+          }
+
+          if (handled) {
+            e.preventDefault();
+          }
+        });
+
+        window.addEventListener('keyup', (e) => {
+          if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA')) {
+            return;
+          }
+
+          let handled = false;
+          if (e.code === 'Space' || e.key === ' ' || e.key === 'Spacebar' || e.keyCode === 32) {
+            this.switchKeys.right = false;
+            handled = true;
+          } else if (e.code === 'Enter' || e.key === 'Enter' || e.keyCode === 13) {
+            this.switchKeys.left = false;
+            handled = true;
+          } else if (e.code === 'ArrowRight' || e.key === 'ArrowRight') {
+            this.switchKeys.right = false;
+            handled = true;
+          } else if (e.code === 'ArrowLeft' || e.key === 'ArrowLeft') {
+            this.switchKeys.left = false;
+            handled = true;
+          } else if (e.code === 'ArrowUp' || e.key === 'ArrowUp') {
+            this.switchKeys.up = false;
+            handled = true;
+          } else if (e.code === 'ArrowDown' || e.key === 'ArrowDown') {
+            this.switchKeys.down = false;
+            handled = true;
+          }
+
+          if (handled) {
+            e.preventDefault();
+          }
+        });
       }
 
       update() {
         if (!this.pointerActive) {
           this.pointerGx *= 0.90;
           this.pointerGy *= 0.90;
+        }
+
+        // スイッチによる重力の計算
+        let targetSwitchGx = 0.0;
+        let targetSwitchGy = 0.0;
+        const now = performance.now() / 1000;
+
+        const isHoldRight = this.switchKeys.right && !this.switchKeys.left;
+        const isHoldLeft = this.switchKeys.left && !this.switchKeys.right;
+
+        if (CONFIG.switchMode === 'hold') {
+          if (isHoldRight) targetSwitchGx = 1.0 * CONFIG.tiltSensitivity;
+          else if (isHoldLeft) targetSwitchGx = -1.0 * CONFIG.tiltSensitivity;
+        } else if (CONFIG.switchMode === 'pulse') {
+          if (this.pulseState.active) {
+            const elapsed = now - this.pulseState.startTime;
+            if (elapsed < CONFIG.switchPulseDuration) {
+              const w = Math.sin((1.0 - elapsed / CONFIG.switchPulseDuration) * Math.PI * 0.5);
+              targetSwitchGx = (this.pulseState.direction === 'right' ? 1.0 : -1.0) * CONFIG.tiltSensitivity * w;
+            } else {
+              this.pulseState.active = false;
+            }
+          }
+        } else {
+          // 'hybrid' (推奨: 押している間は最大加速、離した後も一定時間は滑らかにパルス減衰)
+          if (isHoldRight) {
+            targetSwitchGx = 1.0 * CONFIG.tiltSensitivity;
+          } else if (isHoldLeft) {
+            targetSwitchGx = -1.0 * CONFIG.tiltSensitivity;
+          } else if (this.pulseState.active) {
+            const elapsed = now - this.pulseState.startTime;
+            if (elapsed < CONFIG.switchPulseDuration) {
+              const w = Math.sin((1.0 - elapsed / CONFIG.switchPulseDuration) * Math.PI * 0.5);
+              targetSwitchGx = (this.pulseState.direction === 'right' ? 1.0 : -1.0) * CONFIG.tiltSensitivity * w;
+            } else {
+              this.pulseState.active = false;
+            }
+          }
+        }
+
+        if (this.switchKeys.down && !this.switchKeys.up) {
+          targetSwitchGy = 1.0 * CONFIG.tiltSensitivity;
+        } else if (this.switchKeys.up && !this.switchKeys.down) {
+          targetSwitchGy = -1.0 * CONFIG.tiltSensitivity;
+        }
+
+        // スイッチ入力の滑らかな加減速
+        const smoothRate = (targetSwitchGx !== 0) ? 0.22 : 0.12;
+        this.switchGx += (targetSwitchGx - this.switchGx) * smoothRate;
+        this.switchGy += (targetSwitchGy - this.switchGy) * smoothRate;
+
+        // デバッグ用スイッチ状態ラベル
+        if (this.switchGx > 0.12) {
+          this.activeSwitchLabel = 'RIGHT (Space)';
+        } else if (this.switchGx < -0.12) {
+          this.activeSwitchLabel = 'LEFT (Enter)';
+        } else {
+          this.activeSwitchLabel = 'OFF';
         }
 
         let rawGx = 0;
@@ -751,9 +958,13 @@
         } else if (CONFIG.inputMode === 'pointer') {
           rawGx = this.pointerGx;
           rawGy = this.pointerGy;
+        } else if (CONFIG.inputMode === 'switch') {
+          rawGx = this.switchGx;
+          rawGy = this.switchGy;
         } else {
-          rawGx = this.tiltGx + this.pointerGx;
-          rawGy = this.tiltGy + this.pointerGy;
+          // 'both': 傾斜 + ポインター + スイッチすべて合成
+          rawGx = this.tiltGx + this.pointerGx + this.switchGx;
+          rawGy = this.tiltGy + this.pointerGy + this.switchGy;
         }
 
         this.gx = clamp(rawGx, -2.5, 2.5);
@@ -1527,6 +1738,7 @@
         // デバッグ表示用DOM要素をキャッシュ（毎フレームのgetElementById呼び出しを排除）
         this._debugGx = document.getElementById('debug-gx');
         this._debugGy = document.getElementById('debug-gy');
+        this._debugSwitch = document.getElementById('debug-switch');
 
         this.lastTime = 0;
         this.time = 0;
@@ -1579,6 +1791,15 @@
         btnStart.addEventListener('click', startApp);
         overlay.addEventListener('click', startApp);
 
+        // スイッチ（Space / Enter）でのスタート操作
+        window.addEventListener('keydown', (e) => {
+          if (!overlay.classList.contains('hidden')) {
+            if (e.code === 'Space' || e.code === 'Enter' || e.key === ' ' || e.key === 'Enter' || e.keyCode === 32 || e.keyCode === 13) {
+              startApp();
+            }
+          }
+        });
+
         // タッチやクリック時にも確実に Web Audio をレジューム
         const unlockAudio = () => this.audioSystem.resume();
         window.addEventListener('pointerdown', unlockAudio, { passive: true });
@@ -1612,6 +1833,7 @@
         const bindSlider = (elementId, displayId, configKey, isFloat = true) => {
           const el = document.getElementById(elementId);
           const display = document.getElementById(displayId);
+          if (!el || !display) return;
           el.addEventListener('input', (e) => {
             const val = isFloat ? parseFloat(e.target.value) : parseInt(e.target.value, 10);
             CONFIG[configKey] = val;
@@ -1624,6 +1846,7 @@
 
         bindSlider('param-projector-boost', 'val-projector-boost', 'projectorBoost', true);
         bindSlider('param-tilt-sensitivity', 'val-tilt-sensitivity', 'tiltSensitivity', true);
+        bindSlider('param-switch-pulse-duration', 'val-switch-pulse-duration', 'switchPulseDuration', true);
         bindSlider('param-curl-strength', 'val-curl-strength', 'curlStrength', true);
         bindSlider('param-flow-scale', 'val-flow-scale', 'flowScale', true);
         bindSlider('param-trail-tau', 'val-trail-tau', 'trailTau', true);
@@ -1641,6 +1864,18 @@
           CONFIG.displayMode = e.target.value;
           itemProjectorBoost.style.display = (CONFIG.displayMode === 'projector') ? 'block' : 'none';
         });
+
+        const selectSwitchMode = document.getElementById('select-switch-mode');
+        const itemSwitchPulse = document.getElementById('item-switch-pulse');
+        if (selectSwitchMode) {
+          selectSwitchMode.value = CONFIG.switchMode;
+          selectSwitchMode.addEventListener('change', (e) => {
+            CONFIG.switchMode = e.target.value;
+            if (itemSwitchPulse) {
+              itemSwitchPulse.style.display = (CONFIG.switchMode === 'hold') ? 'none' : 'block';
+            }
+          });
+        }
 
         document.getElementById('select-color-theme').addEventListener('change', (e) => {
           this.particleSystem.applyTheme(e.target.value);
@@ -1673,6 +1908,12 @@
         // デバッグ表示更新（キャッシュ済みDOM参照を使用）
         this._debugGx.textContent = this.gravity.gx.toFixed(2);
         this._debugGy.textContent = (CONFIG.gravityAxes === 'x-only') ? '0.00 (固定)' : this.gravity.gy.toFixed(2);
+
+        if (this._debugSwitch) {
+          const lbl = this.gravity.activeSwitchLabel;
+          this._debugSwitch.textContent = lbl;
+          this._debugSwitch.className = 'switch-badge' + (lbl.includes('LEFT') ? ' active-left' : (lbl.includes('RIGHT') ? ' active-right' : ''));
+        }
 
         requestAnimationFrame((ts) => this.loop(ts));
       }
