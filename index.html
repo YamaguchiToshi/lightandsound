@@ -486,6 +486,11 @@
     </div>
 
     <div class="setting-item">
+      <label>左右定位の強調度 (Stereo Width) <span id="val-stereo-width">1.45</span></label>
+      <input type="range" id="param-stereo-width" min="0.5" max="2.2" step="0.05" value="1.45">
+    </div>
+
+    <div class="setting-item">
       <label>音階スケール</label>
       <select id="select-pitch-scale">
         <option value="pentatonic">ペンタトニック（和風・神秘的）</option>
@@ -612,6 +617,7 @@
       masterVolume: 0.6,
       streamVolume: 0.5,     // 流体連続音の音量
       soundDensity: 0.25,     // 顕著結晶ベルの発音密度
+      stereoWidth: 1.45,      // 左右定位の強調・空間広がり度 (0.5〜2.2)
       pitchScale: 'pentatonic'
     };
 
@@ -1442,7 +1448,7 @@
           convolver.buffer = impulse;
 
           this.reverbSendGain = this.ctx.createGain();
-          this.reverbSendGain.gain.value = 0.35;
+          this.reverbSendGain.gain.value = 0.20;
 
           const reverbFilter = this.ctx.createBiquadFilter();
           reverbFilter.type = 'lowpass';
@@ -1571,6 +1577,17 @@
         return freqs[clampedIndex];
       }
 
+      // 左右定位の非線形パワーカーブ計算（中央付近からの分離感を大幅に強調）
+      computeStereoPan(normX, multiplier = 1.0) {
+        const signed = (normX - 0.5) * 2.0; // -1.0(左端) 〜 +1.0(右端)
+        if (Math.abs(signed) < 0.001) return 0.0;
+        const sign = signed < 0 ? -1 : 1;
+        const width = (typeof CONFIG.stereoWidth === 'number') ? CONFIG.stereoWidth : 1.45;
+        // 0.65乗カーブで中央付近からの広がりを加速し、stereoWidth倍率を適用
+        const spread = Math.pow(Math.abs(signed), 0.65) * width * multiplier;
+        return clamp(sign * spread, -1.0, 1.0);
+      }
+
       // Meso: Granular音粒の生成（流速に連動する水泡・光のせせらぎ）
       triggerGrain(centroidX, normY, speed) {
         const now = this.ctx.currentTime;
@@ -1591,8 +1608,8 @@
 
         const panner = this.ctx.createStereoPanner ? this.ctx.createStereoPanner() : null;
         if (panner) {
-          const jitter = (Math.random() - 0.5) * 0.35;
-          const panVal = clamp((centroidX - 0.5) * 2.0 + jitter, -1.0, 1.0);
+          const jitter = (Math.random() - 0.5) * 0.18;
+          const panVal = clamp(this.computeStereoPan(centroidX, 1.05) + jitter, -1.0, 1.0);
           panner.pan.setValueAtTime(panVal, now);
         }
 
@@ -1626,7 +1643,7 @@
 
         const panner = this.ctx.createStereoPanner ? this.ctx.createStereoPanner() : null;
         if (panner) {
-          const panVal = clamp((normX - 0.5) * 2.0, -1.0, 1.0);
+          const panVal = this.computeStereoPan(normX, 1.25);
           panner.pan.setValueAtTime(panVal, now);
         }
 
@@ -1707,8 +1724,8 @@
           this.streamGain.gain.setTargetAtTime(targetVol, now, 0.08);
 
           if (this.streamPanner) {
-            const panVal = clamp((this.smoothCentroidX - 0.5) * 1.8, -1.0, 1.0);
-            this.streamPanner.pan.setTargetAtTime(panVal, now, 0.08);
+            const panVal = this.computeStereoPan(this.smoothCentroidX, 1.15);
+            this.streamPanner.pan.setTargetAtTime(panVal, now, 0.06);
           }
         }
 
@@ -1886,6 +1903,7 @@
         bindSlider('param-master-volume', 'val-master-volume', 'masterVolume', true);
         bindSlider('param-stream-volume', 'val-stream-volume', 'streamVolume', true);
         bindSlider('param-sound-density', 'val-sound-density', 'soundDensity', true);
+        bindSlider('param-stereo-width', 'val-stereo-width', 'stereoWidth', true);
 
         // セレクトボックス
         const selectDisplayMode = document.getElementById('select-display-mode');

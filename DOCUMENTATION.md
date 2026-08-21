@@ -160,6 +160,7 @@ iPadのLiquid Retina/有機ELディスプレイと比較し、会議室用プレ
 | 主音量 | `masterVolume` | `0.6` | 0.0 ～ 1.0 | マスターゲイン出力 |
 | 流体音の豊かさ | `streamVolume` | `0.5` | 0.0 ～ 1.0 | 背景水流ノイズ・Granular音・ドローンのゲイン |
 | 結晶ベル発音頻度 | `soundDensity` | `0.25` | 0.05 ～ 0.8 | 顕著イベント発生時のベル発音確率・頻度 |
+| 左右定位の強調度 | `stereoWidth` | `1.45` | 0.5 ～ 2.2 | 結晶音・せせらぎ・水流の左右ステレオ分離度 |
 | 音階スケール | `pitchScale` | `pentatonic` | `pentatonic`, `major`, `crystal` | 結晶ベルのピッチ量子化音階 |
 
 ---
