@@ -92,6 +92,15 @@ binds both tables generically, so persistence and label updates come for free; a
 A stale saved value will override a changed default on a returning device — rename the key or the
 config field if that matters.
 
+The panel is split into a short always-visible section (the things a teacher retunes per child —
+volume, palette, input mode, response strength, switch behavior, screen type) and `<details
+class="settings-group">` blocks for the rest (光の詳細 / 音の詳細 / 操作の詳細 / 使い方とヒント).
+Because binding is by id, markup can be moved between groups freely without touching the tables —
+but `debug-gx` / `debug-gy` / `debug-switch` must stay in the DOM (they now live inside 操作の詳細;
+`App.loop` writes them every frame from cached references, and a collapsed `<details>` still keeps
+its children in the document). Labels are plain Japanese aimed at teachers rather than the parameter
+names; `DOCUMENTATION.md` §5 maps every on-screen label to its `CONFIG` key.
+
 `DOCUMENTATION.md` §5 is the authoritative table of every parameter (default, range, meaning); keep
 it in sync when parameters change.
 

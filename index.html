@@ -313,6 +313,66 @@
       outline: none;
     }
 
+    /* 詳細設定（折りたたみ） */
+    .settings-group {
+      margin: 0 0 12px 0;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.03);
+      overflow: hidden;
+    }
+
+    .settings-group > summary {
+      padding: 13px 15px;
+      font-size: 0.88rem;
+      color: #cfe0f0;
+      cursor: pointer;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      transition: background 0.2s, color 0.2s;
+    }
+
+    .settings-group > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    /* 開閉状態を示す三角。開くと下向きに回る */
+    .settings-group > summary::before {
+      content: '▶';
+      font-size: 0.68rem;
+      color: #00f0ff;
+      transition: transform 0.25s;
+    }
+
+    .settings-group[open] > summary::before {
+      transform: rotate(90deg);
+    }
+
+    .settings-group > summary:hover {
+      background: rgba(0, 240, 255, 0.09);
+      color: #ffffff;
+    }
+
+    .settings-group[open] > summary {
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .settings-group-body {
+      padding: 18px 15px 2px 15px;
+    }
+
+    /* 主要項目と詳細設定の境目 */
+    .settings-divider {
+      margin: 26px 0 16px 0;
+      padding-top: 16px;
+      border-top: 1px solid rgba(255, 255, 255, 0.15);
+      font-size: 0.76rem;
+      letter-spacing: 0.08em;
+      color: #7f8ea3;
+    }
+
     .virtual-gravity-debug {
       margin-top: 18px;
       padding: 12px;
@@ -395,7 +455,7 @@
   <!-- 設定パネル -->
   <div id="settings-panel">
     <div class="settings-header">
-      <h2>パラメータ調整</h2>
+      <h2>設定</h2>
       <button class="close-btn" id="btn-close-settings">✕</button>
     </div>
 
@@ -404,20 +464,12 @@
     </div>
 
     <div class="setting-item">
-      <label>表示モード (Display Mode)</label>
-      <select id="select-display-mode">
-        <option value="projector">会議室プロジェクター・大画面（高彩度・高視認性）</option>
-        <option value="standard">iPad / Retina画面（標準）</option>
-      </select>
-    </div>
-
-    <div class="setting-item" id="item-projector-boost">
-      <label>プロジェクター視認性スケール <span id="val-projector-boost">1.40</span></label>
-      <input type="range" id="param-projector-boost" min="1.0" max="2.4" step="0.05" value="1.40">
+      <label>音の大きさ <span id="val-master-volume">0.6</span></label>
+      <input type="range" id="param-master-volume" min="0.0" max="1.0" step="0.05" value="0.6">
     </div>
 
     <div class="setting-item">
-      <label>色彩テーマ (Color Theme)</label>
+      <label>光の色</label>
       <select id="select-color-theme">
         <option value="aurora">オーロラ・コズミック (Aurora Cosmic)</option>
         <option value="ocean">夜光の海 (Bioluminescent Ocean)</option>
@@ -429,135 +481,165 @@
     </div>
 
     <div class="setting-item">
-      <label>入力モード</label>
+      <label>操作する方法</label>
       <select id="select-input-mode">
-        <option value="both">すべて合成（傾斜 ＋ スイッチ ＋ タッチ）</option>
-        <option value="switch">スイッチ専用（Space=右 / Enter=左）</option>
-        <option value="tilt">iPadの傾斜のみ</option>
-        <option value="pointer">ポインター／タッチのみ</option>
+        <option value="both">すべて（傾き ＋ スイッチ ＋ タッチ）</option>
+        <option value="switch">スイッチだけ（Space=右 / Enter=左）</option>
+        <option value="tilt">iPadの傾きだけ</option>
+        <option value="pointer">タッチ・マウスだけ</option>
       </select>
     </div>
 
     <div class="setting-item">
-      <label>スイッチ応答モード (Switch Mode)</label>
-      <select id="select-switch-mode">
-        <option value="hybrid">長押し連動 ＋ 単押しパルス維持 (推奨)</option>
-        <option value="hold">長押し中のみ傾斜 (Hold)</option>
-        <option value="pulse">ワンプッシュで一定時間流れる (Pulse)</option>
-      </select>
-    </div>
-
-    <div class="setting-item" id="item-switch-pulse">
-      <label>スイッチ維持時間 (Pulse Duration) <span id="val-switch-pulse-duration">1.2</span>s</label>
-      <input type="range" id="param-switch-pulse-duration" min="0.4" max="3.0" step="0.1" value="1.2">
-    </div>
-
-    <div class="setting-item">
-      <label>有効な傾斜軸</label>
-      <select id="select-gravity-axes">
-        <option value="x-only">左右の傾きのみ（X軸）</option>
-        <option value="xy">左右 ＋ 上下の傾き（X軸 ＋ Y軸）</option>
-      </select>
-    </div>
-
-    <div class="setting-item">
-      <label>傾斜応答感度 (Tilt Sensitivity) <span id="val-tilt-sensitivity">2.2</span></label>
+      <label>反応の強さ <span id="val-tilt-sensitivity">2.2</span></label>
       <input type="range" id="param-tilt-sensitivity" min="0.5" max="4.5" step="0.1" value="2.2">
     </div>
 
     <div class="setting-item">
-      <label>多重渦の強さ (Curl Turbulence) <span id="val-curl-strength">1.4</span></label>
-      <input type="range" id="param-curl-strength" min="0.0" max="3.0" step="0.1" value="1.4">
-    </div>
-
-    <div class="setting-item">
-      <label>流体空間スケール (Flow Scale) <span id="val-flow-scale">1.6</span></label>
-      <input type="range" id="param-flow-scale" min="0.5" max="4.0" step="0.1" value="1.6">
-    </div>
-
-    <div class="setting-item">
-      <label>残像寿命 (Trail Tau - 秒) <span id="val-trail-tau">0.65</span></label>
-      <input type="range" id="param-trail-tau" min="0.15" max="2.5" step="0.05" value="0.65">
-    </div>
-
-    <div class="setting-item">
-      <label>光粒子の数 <span id="val-particle-count">280</span></label>
-      <input type="range" id="param-particle-count" min="50" max="700" step="10" value="280">
-    </div>
-
-    <div class="setting-item">
-      <label>光粒子の基本サイズ <span id="val-particle-size">6</span></label>
-      <input type="range" id="param-particle-size" min="3" max="18" step="1" value="6">
-    </div>
-
-    <div class="setting-item">
-      <label>主音量 (Master Volume) <span id="val-master-volume">0.6</span></label>
-      <input type="range" id="param-master-volume" min="0.0" max="1.0" step="0.05" value="0.6">
-    </div>
-
-    <div class="setting-item">
-      <label>流体音の豊かさ (Fluid Bed Gain) <span id="val-stream-volume">0.5</span></label>
-      <input type="range" id="param-stream-volume" min="0.0" max="1.0" step="0.05" value="0.5">
-    </div>
-
-    <div class="setting-item">
-      <label>結晶ベル発音頻度 (Chime Density) <span id="val-sound-density">0.25</span></label>
-      <input type="range" id="param-sound-density" min="0.05" max="0.8" step="0.05" value="0.25">
-    </div>
-
-    <div class="setting-item">
-      <label>左右定位の強調度 (Stereo Width) <span id="val-stereo-width">1.45</span></label>
-      <input type="range" id="param-stereo-width" min="0.5" max="2.2" step="0.05" value="1.45">
-    </div>
-
-    <div class="setting-item">
-      <label>音階スケール</label>
-      <select id="select-pitch-scale">
-        <option value="pentatonic">ペンタトニック（和風・神秘的）</option>
-        <option value="major">メジャースケール（明るい）</option>
-        <option value="crystal">クリスタルベル（高音・キラキラ）</option>
+      <label>スイッチの反応のしかた</label>
+      <select id="select-switch-mode">
+        <option value="hybrid">押している間＋離しても少し続く（推奨）</option>
+        <option value="hold">押している間だけ</option>
+        <option value="pulse">一度押すと決まった時間だけ流れる</option>
       </select>
     </div>
 
-    <div class="setting-item">
-      <label>左右端の到達音 (Edge Anchor)</label>
-      <select id="select-edge-anchor">
-        <option value="on">鳴らす（画面の端に着いたことを音で知らせる）</option>
-        <option value="off">鳴らさない</option>
-      </select>
+    <div class="setting-item" id="item-switch-pulse">
+      <label>離したあと流れ続ける時間（秒） <span id="val-switch-pulse-duration">1.2</span></label>
+      <input type="range" id="param-switch-pulse-duration" min="0.4" max="3.0" step="0.1" value="1.2">
     </div>
 
     <div class="setting-item">
-      <label>タップの波紋 (Ripple)</label>
-      <select id="select-ripple-effect">
-        <option value="on">出す（触れた位置に波紋と着水音）</option>
-        <option value="off">出さない</option>
+      <label>映す画面</label>
+      <select id="select-display-mode">
+        <option value="projector">プロジェクター・大画面（高彩度・高視認性）</option>
+        <option value="standard">iPad / パソコンの画面（標準）</option>
       </select>
     </div>
 
-    <div class="virtual-gravity-debug">
-      Virtual Gravity:<br>
-      X: <span id="debug-gx">0.00</span> | Y: <span id="debug-gy">0.00</span><br>
-      Switch: <span id="debug-switch" class="switch-badge">OFF</span><br>
-      Audio: 3-Tier Granular & Modal Engine
+    <div class="setting-item" id="item-projector-boost">
+      <label>プロジェクターでの見やすさ <span id="val-projector-boost">1.40</span></label>
+      <input type="range" id="param-projector-boost" min="1.0" max="2.4" step="0.05" value="1.40">
     </div>
 
-    <div class="switch-guide">
-      🕹️ <b>スイッチ入力対応</b>:<br>
-      ・<b>Spaceキー</b>: 右に傾ける（右方向へ光が流れる）<br>
-      ・<b>Enterキー</b>: 左に傾ける（左方向へ光が流れる）<br>
-      ・<b>矢印キー (← / →)</b> でも同様に操作可能です。<br>
-      ※ 画面開始時もSpaceまたはEnterを押すだけでスタートできます。
-    </div>
+    <div class="settings-divider">詳細設定</div>
 
-    <div class="projector-tip">
-      💡 <b>プロジェクター投影のコツ</b>: 会議室用プロジェクター本体の映像モードを「プレゼンテーション（文字用）」から「シネマ」または「sRGB / ゲーム」に変更し、部屋の照明を少し落とすと光粒の立体感と透明感が劇的に引き立ちます。
-    </div>
+    <details class="settings-group">
+      <summary>光の詳細</summary>
+      <div class="settings-group-body">
+        <div class="setting-item">
+          <label>光の数 <span id="val-particle-count">280</span></label>
+          <input type="range" id="param-particle-count" min="50" max="700" step="10" value="280">
+        </div>
 
-    <div class="pwa-guide">
-      📱 <b>iPadでアドレスバーを完全に消す方法</b>:<br>
-      Safariの共有ボタン（四角から上矢印）をタップし、メニューから「<b>ホーム画面に追加</b>」を選択すると、ブラウザ枠が一切ない完全な全画面アプリとして起動できます。
-    </div>
+        <div class="setting-item">
+          <label>光の粒の大きさ <span id="val-particle-size">6</span></label>
+          <input type="range" id="param-particle-size" min="3" max="18" step="1" value="6">
+        </div>
+
+        <div class="setting-item">
+          <label>光の尾の長さ（秒） <span id="val-trail-tau">0.65</span></label>
+          <input type="range" id="param-trail-tau" min="0.15" max="2.5" step="0.05" value="0.65">
+        </div>
+
+        <div class="setting-item">
+          <label>渦の強さ <span id="val-curl-strength">1.4</span></label>
+          <input type="range" id="param-curl-strength" min="0.0" max="3.0" step="0.1" value="1.4">
+        </div>
+
+        <div class="setting-item">
+          <label>渦の大きさ <span id="val-flow-scale">1.6</span></label>
+          <input type="range" id="param-flow-scale" min="0.5" max="4.0" step="0.1" value="1.6">
+        </div>
+      </div>
+    </details>
+
+    <details class="settings-group">
+      <summary>音の詳細</summary>
+      <div class="settings-group-body">
+        <div class="setting-item">
+          <label>水音・風音の量 <span id="val-stream-volume">0.5</span></label>
+          <input type="range" id="param-stream-volume" min="0.0" max="1.0" step="0.05" value="0.5">
+        </div>
+
+        <div class="setting-item">
+          <label>ベルの鳴る頻度 <span id="val-sound-density">0.25</span></label>
+          <input type="range" id="param-sound-density" min="0.05" max="0.8" step="0.05" value="0.25">
+        </div>
+
+        <div class="setting-item">
+          <label>音の左右の広がり <span id="val-stereo-width">1.45</span></label>
+          <input type="range" id="param-stereo-width" min="0.5" max="2.2" step="0.05" value="1.45">
+        </div>
+
+        <div class="setting-item">
+          <label>音階</label>
+          <select id="select-pitch-scale">
+            <option value="pentatonic">ペンタトニック（和風・神秘的）</option>
+            <option value="major">メジャースケール（明るい）</option>
+            <option value="crystal">クリスタルベル（高音・キラキラ）</option>
+          </select>
+        </div>
+
+        <div class="setting-item">
+          <label>画面の端に着いたときの音</label>
+          <select id="select-edge-anchor">
+            <option value="on">鳴らす（端に着いたことを音で知らせる）</option>
+            <option value="off">鳴らさない</option>
+          </select>
+        </div>
+      </div>
+    </details>
+
+    <details class="settings-group">
+      <summary>操作の詳細</summary>
+      <div class="settings-group-body">
+        <div class="setting-item">
+          <label>光が動く向き</label>
+          <select id="select-gravity-axes">
+            <option value="x-only">左右だけ</option>
+            <option value="xy">左右 ＋ 上下</option>
+          </select>
+        </div>
+
+        <div class="setting-item">
+          <label>触れたときの波紋</label>
+          <select id="select-ripple-effect">
+            <option value="on">出す（触れた場所に波紋と水の音）</option>
+            <option value="off">出さない</option>
+          </select>
+        </div>
+
+        <div class="virtual-gravity-debug">
+          Virtual Gravity:<br>
+          X: <span id="debug-gx">0.00</span> | Y: <span id="debug-gy">0.00</span><br>
+          Switch: <span id="debug-switch" class="switch-badge">OFF</span><br>
+          Audio: 3-Tier Granular &amp; Modal Engine
+        </div>
+      </div>
+    </details>
+
+    <details class="settings-group">
+      <summary>使い方とヒント</summary>
+      <div class="settings-group-body">
+        <div class="switch-guide">
+          🕹️ <b>スイッチ入力対応</b>:<br>
+          ・<b>Spaceキー</b>: 右に傾ける（右方向へ光が流れる）<br>
+          ・<b>Enterキー</b>: 左に傾ける（左方向へ光が流れる）<br>
+          ・<b>矢印キー (← / →)</b> でも同様に操作可能です。<br>
+          ※ 画面開始時もSpaceまたはEnterを押すだけでスタートできます。
+        </div>
+
+        <div class="projector-tip">
+          💡 <b>プロジェクター投影のコツ</b>: 会議室用プロジェクター本体の映像モードを「プレゼンテーション（文字用）」から「シネマ」または「sRGB / ゲーム」に変更し、部屋の照明を少し落とすと光粒の立体感と透明感が劇的に引き立ちます。
+        </div>
+
+        <div class="pwa-guide">
+          📱 <b>iPadでアドレスバーを完全に消す方法</b>:<br>
+          Safariの共有ボタン（四角から上矢印）をタップし、メニューから「<b>ホーム画面に追加</b>」を選択すると、ブラウザ枠が一切ない完全な全画面アプリとして起動できます。
+        </div>
+      </div>
+    </details>
   </div>
 
   <script>
