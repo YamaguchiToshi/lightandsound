@@ -49,6 +49,23 @@
       background-color: #000000;
     }
 
+    /* 波紋レイヤー（残像減衰の影響を受けないよう本体キャンバスと分離する） */
+    #ripple-layer {
+      display: block;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      height: 100dvh;
+      pointer-events: none;
+      z-index: 10;
+      /* 光の場を隠すのではなく加算的に重ねる。screen は上限を超えないので白飛びしない */
+      mix-blend-mode: screen;
+      /* 波紋がない間は合成コストを完全に無くす（JS が表示を切り替える） */
+      display: none;
+    }
+
     /* 起動オーバーレイ */
     #start-overlay {
       position: absolute;
@@ -360,6 +377,9 @@
   <!-- メインCanvas -->
   <canvas id="stage"></canvas>
 
+  <!-- 波紋レイヤー（毎フレーム消去して描くため輪郭が保たれる） -->
+  <canvas id="ripple-layer"></canvas>
+
   <!-- 起動オーバーレイ -->
   <div id="start-overlay">
     <button class="start-button" id="btn-start">画面に触れてスタート</button>
@@ -499,6 +519,22 @@
       </select>
     </div>
 
+    <div class="setting-item">
+      <label>左右端の到達音 (Edge Anchor)</label>
+      <select id="select-edge-anchor">
+        <option value="on">鳴らす（画面の端に着いたことを音で知らせる）</option>
+        <option value="off">鳴らさない</option>
+      </select>
+    </div>
+
+    <div class="setting-item">
+      <label>タップの波紋 (Ripple)</label>
+      <select id="select-ripple-effect">
+        <option value="on">出す（触れた位置に波紋と着水音）</option>
+        <option value="off">出さない</option>
+      </select>
+    </div>
+
     <div class="virtual-gravity-debug">
       Virtual Gravity:<br>
       X: <span id="debug-gx">0.00</span> | Y: <span id="debug-gy">0.00</span><br>
@@ -618,8 +654,167 @@
       streamVolume: 0.5,     // 流体連続音の音量
       soundDensity: 0.25,     // 顕著結晶ベルの発音密度
       stereoWidth: 1.45,      // 左右定位の強調・空間広がり度 (0.5〜2.2)
-      pitchScale: 'pentatonic'
+      pitchScale: 'pentatonic',
+      edgeAnchor: 'on',       // 'on': 左右端に到達したとき一度だけ基準点の音を鳴らす
+      rippleEffect: 'on'      // 'on': 画面タップ／クリックで波紋と着水音を出す
     };
+
+    /**
+     * TUNING - 体験の手触りを決める内部定数（設定パネルには出さない値）
+     */
+    const TUNING = {
+      gravity: {
+        maxTiltAngle: 22,           // この傾斜角(度)で入力が最大になる
+        range: 2.5,                 // 合成後の仮想重力のクランプ範囲(±)
+        pointerScale: 0.8,          // ポインター入力に掛ける感度倍率
+        pointerSpan: 0.7,           // 画面半分に対し、どの割合で最大に達するか
+        pointerDecay: 0.90,         // ポインターを離した後のフレームごとの減衰率
+        switchAttack: 0.22,         // スイッチONへ向かうときの追従率
+        switchRelease: 0.12,        // スイッチOFFへ戻るときの追従率
+        switchLabelThreshold: 0.12  // デバッグ表示をON扱いにするしきい値
+      },
+      particle: {
+        gravityScale: 1.35,         // 仮想重力 → 目標速度の変換係数
+        curlXY: 0.08,               // Curlノイズの寄与（左右＋上下モード）
+        curlDrift: 0.035,           // Curlノイズの寄与（左右のみモードのY方向の漂い）
+        steerStrength: 8.5,         // 目標速度への追従の強さ
+        separationInterval: 3,      // 粒子間反発を計算するフレーム間隔
+        separationRadius: 2.4,      // 反発が働く距離（particleSize の倍数）
+        separationPush: 0.07        // 1回あたりの押し戻し量
+      },
+      audio: {
+        // 残響は方向感をぼかすため、位置を伝える役割が大きい音源ほど送出を絞る。
+        // ステレオスピーカー再生では直接音／残響音比が定位の明瞭さを直接決める。
+        reverbSendBell: 0.45,       // 結晶ベル（最も定位を掴みやすい単発音）の送出倍率
+        reverbSendGrain: 0.70,      // せせらぎ音粒の送出倍率
+        grainPanJitter: 0.06,       // 音粒の定位ゆらぎ幅(±0.03)。大きいほど自然だが位置がぼやける
+        reverbSendAnchor: 0.25,     // 端到達音の送出倍率。基準点なので最も乾かす
+        edgeAnchorOn: 0.30,         // 片側にこの比率だけ光が溜まったら「到達」とみなす
+        edgeAnchorOff: 0.18,        // この比率を下回るまで再発音しない（ヒステリシス）
+        edgeAnchorInterval: 0.4,    // 端到達音の最小間隔(秒)
+        edgeAnchorVolume: 0.22,     // 端到達音の音量
+        edgeAnchorFreq: 523.25,     // 端到達音の倍音(C5)。全音階に共通して含まれる音
+        reverbSendRipple: 0.50,     // 着水音の送出倍率
+        rippleVolume: 0.30,         // 着水音の音量
+        ripplePanWidth: 1.25,       // 着水音の定位倍率（単発音なので広く振る）
+        rippleFreqLow: 330,         // 画面下端＝大きい石の主気泡周波数(Hz)
+        rippleFreqHigh: 620,        // 画面上端＝小さい石の主気泡周波数(Hz)
+        rippleFreqRise: 1.55,       // 減衰中に気泡振動数が上がる倍率（Minnaertモデル）
+        rippleDecay: 0.18           // 主気泡の減衰時間(秒)
+      },
+      ripple: {
+        life: 1.20,                 // 波紋が消えるまでの時間(秒)
+        ringDelays: [0, 0.13, 0.26],// 追いかけて広がる波の時間差(秒)
+        radiusRatio: 0.42,          // 最大半径（画面の短辺に対する比）
+        bandWidth: 15,              // 波の光の帯の太さ(px)
+        bloomWidth: 46,             // 波の外周ブルームの広がり(px)
+        brightness: 1.0,            // 波紋全体の明るさ倍率（投影環境に合わせて調整する）
+        pushStrength: 45,           // 波面が粒子を揺らす強さ。0=相互作用なし / 80以上は爆発的になる
+        pushReach: 55,              // 波面の影響が及ぶ距離(px)
+        randomMargin: 0.12,         // マウス操作時の発生位置を画面端から離す余白（比率）
+        maxConcurrent: 10           // 同時に存在できる波紋の数
+      }
+    };
+
+    /**
+     * PARTICLE_LAYERS - 被写界深度3層の構成比と質感
+     * share は上から順に累積で判定するため、並び順を変えると分布が変わる。
+     * sizeScale / sensitivity は [基準値, 乱数の振れ幅]。
+     */
+    const PARTICLE_LAYERS = [
+      { name: 'bokeh',    share: 0.06, sizeScale: [2.40, 1.40], sensitivity: [0.55, 0.35], alpha: 0.22, history: 2 },
+      { name: 'stardust', share: 0.19, sizeScale: [0.35, 0.35], sensitivity: [1.10, 0.60], alpha: 0.70, history: 0 },
+      { name: 'comet',    share: 0.75, sizeScale: [0.80, 0.60], sensitivity: [0.90, 0.50], alpha: 0.75, history: 5 }
+    ];
+
+    /** 構成比に従って粒子の所属レイヤーを抽選する */
+    function pickParticleLayer() {
+      const rand = Math.random();
+      let acc = 0;
+      for (const layer of PARTICLE_LAYERS) {
+        acc += layer.share;
+        if (rand < acc) return layer;
+      }
+      return PARTICLE_LAYERS[PARTICLE_LAYERS.length - 1];
+    }
+
+    /**
+     * SWITCH_KEYS - スイッチ／キーボード入力の対応表（先に一致したものが優先）
+     * pulse: true のキーは単押しでも一定時間流れ続ける（Hybrid / Pulse モード）。
+     */
+    const SWITCH_KEYS = [
+      { dir: 'right', pulse: true,  match: (e) => e.code === 'Space' || e.key === ' ' || e.key === 'Spacebar' || e.keyCode === 32 },
+      { dir: 'left',  pulse: true,  match: (e) => e.code === 'Enter' || e.key === 'Enter' || e.keyCode === 13 },
+      { dir: 'right', pulse: true,  match: (e) => e.code === 'ArrowRight' || e.key === 'ArrowRight' },
+      { dir: 'left',  pulse: true,  match: (e) => e.code === 'ArrowLeft' || e.key === 'ArrowLeft' },
+      { dir: 'up',    pulse: false, match: (e) => e.code === 'ArrowUp' || e.key === 'ArrowUp' },
+      { dir: 'down',  pulse: false, match: (e) => e.code === 'ArrowDown' || e.key === 'ArrowDown' }
+    ];
+
+    /**
+     * SCALES - 結晶ベルのピッチ量子化音階
+     * 音粒生成のたびに配列を作り直さないよう、モジュールスコープに固定する。
+     */
+    const SCALES = {
+      // ペンタトニック（最も調和が高く心地よい）
+      pentatonic: [
+        130.81, 146.83, 164.81, 196.00, 220.00,
+        261.63, 293.66, 329.63, 392.00, 440.00,
+        523.25, 587.33, 659.25, 783.99, 880.00,
+        1046.50, 1174.66, 1318.51
+      ],
+      major: [
+        130.81, 146.83, 164.81, 174.61, 196.00, 220.00, 246.94,
+        261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 493.88,
+        523.25, 587.33, 659.25, 783.99, 880.00, 1046.50
+      ],
+      crystal: [
+        523.25, 659.25, 783.99, 1046.50, 1318.51, 1567.98, 2093.00, 2637.02
+      ]
+    };
+
+    /**
+     * MODAL_PARTIALS - クリスタルベルの非整数倍音モデル（振動比・音量・減衰秒）
+     */
+    const MODAL_PARTIALS = [
+      { ratio: 1.000, gain: 0.24, decay: 1.20 },
+      { ratio: 2.756, gain: 0.09, decay: 0.65 },
+      { ratio: 5.404, gain: 0.03, decay: 0.35 }
+    ];
+
+    /**
+     * SLIDERS / SELECTS - 設定パネルのUI配線定義
+     * slug は HTML 側の id と対応する（param-<slug> / val-<slug> / select-<slug>）。
+     * 設定を1つ増やすときは CONFIG・HTML・この表の3箇所だけを触ればよい。
+     */
+    const SLIDERS = [
+      { slug: 'projector-boost',       key: 'projectorBoost',      float: true },
+      { slug: 'tilt-sensitivity',      key: 'tiltSensitivity',     float: true },
+      { slug: 'switch-pulse-duration', key: 'switchPulseDuration', float: true },
+      { slug: 'curl-strength',         key: 'curlStrength',        float: true },
+      { slug: 'flow-scale',            key: 'flowScale',           float: true },
+      { slug: 'trail-tau',             key: 'trailTau',            float: true },
+      { slug: 'particle-count',        key: 'particleCount',       float: false },
+      { slug: 'particle-size',         key: 'particleSize',        float: false },
+      { slug: 'master-volume',         key: 'masterVolume',        float: true, apply: (app) => app.audioSystem.updateVolume() },
+      { slug: 'stream-volume',         key: 'streamVolume',        float: true },
+      { slug: 'sound-density',         key: 'soundDensity',        float: true },
+      { slug: 'stereo-width',          key: 'stereoWidth',         float: true }
+    ];
+
+    const SELECTS = [
+      { slug: 'display-mode', key: 'displayMode',
+        toggles: { id: 'item-projector-boost', when: (v) => v === 'projector' } },
+      { slug: 'switch-mode',  key: 'switchMode',
+        toggles: { id: 'item-switch-pulse', when: (v) => v !== 'hold' } },
+      { slug: 'color-theme',  key: 'colorTheme',
+        apply: (app, v) => app.particleSystem.applyTheme(v) },
+      { slug: 'input-mode',   key: 'inputMode' },
+      { slug: 'gravity-axes', key: 'gravityAxes' },
+      { slug: 'pitch-scale',  key: 'pitchScale' },
+      { slug: 'edge-anchor',  key: 'edgeAnchor' },
+      { slug: 'ripple-effect', key: 'rippleEffect' }
+    ];
 
     /**
      * Simplex Noise 2D
@@ -796,7 +991,7 @@
             screenGy = beta;
           }
 
-          const maxAngle = 22;
+          const maxAngle = TUNING.gravity.maxTiltAngle;
           const normGx = clamp(screenGx / maxAngle, -1.0, 1.0);
           const normGy = clamp(screenGy / maxAngle, -1.0, 1.0);
 
@@ -808,102 +1003,70 @@
         const updatePointerGravity = (clientX, clientY) => {
           const cx = window.innerWidth / 2;
           const cy = window.innerHeight / 2;
-          this.pointerGx = clamp(((clientX - cx) / (cx * 0.7)) * (CONFIG.tiltSensitivity * 0.8), -2.5, 2.5);
-          this.pointerGy = clamp(((clientY - cy) / (cy * 0.7)) * (CONFIG.tiltSensitivity * 0.8), -2.5, 2.5);
+          const gain = CONFIG.tiltSensitivity * TUNING.gravity.pointerScale;
+          const span = TUNING.gravity.pointerSpan;
+          const range = TUNING.gravity.range;
+          this.pointerGx = clamp(((clientX - cx) / (cx * span)) * gain, -range, range);
+          this.pointerGy = clamp(((clientY - cy) / (cy * span)) * gain, -range, range);
         };
 
-        window.addEventListener('pointermove', (e) => {
+        // 設定パネルやスタート画面の上での操作は仮想重力に反映しない
+        const onPointerInput = (e) => {
           if (CONFIG.inputMode === 'tilt' || CONFIG.inputMode === 'switch') return;
           if (e.target && e.target.closest && e.target.closest('#settings-panel, .top-controls, #start-overlay')) return;
           updatePointerGravity(e.clientX, e.clientY);
           this.pointerActive = true;
-        });
+        };
 
-        window.addEventListener('pointerdown', (e) => {
-          if (CONFIG.inputMode === 'tilt' || CONFIG.inputMode === 'switch') return;
-          if (e.target && e.target.closest && e.target.closest('#settings-panel, .top-controls, #start-overlay')) return;
-          updatePointerGravity(e.clientX, e.clientY);
-          this.pointerActive = true;
-        });
+        window.addEventListener('pointermove', onPointerInput);
+        window.addEventListener('pointerdown', onPointerInput);
 
         window.addEventListener('pointerup', () => {
           this.pointerActive = false;
         });
 
         // 3. スイッチインターフェース／キーボード操作 (Space=右 / Enter=左)
-        window.addEventListener('keydown', (e) => {
-          if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA')) {
-            return;
-          }
+        const isFormField = (target) => !!target &&
+          (target.tagName === 'INPUT' || target.tagName === 'SELECT' || target.tagName === 'TEXTAREA');
 
-          const now = performance.now() / 1000;
-          let handled = false;
+        const applySwitchKey = (e, pressed) => {
+          if (isFormField(e.target)) return;
 
-          if (e.code === 'Space' || e.key === ' ' || e.key === 'Spacebar' || e.keyCode === 32) {
-            this.switchKeys.right = true;
-            this.pulseState = { active: true, direction: 'right', startTime: now };
-            handled = true;
-          } else if (e.code === 'Enter' || e.key === 'Enter' || e.keyCode === 13) {
-            this.switchKeys.left = true;
-            this.pulseState = { active: true, direction: 'left', startTime: now };
-            handled = true;
-          } else if (e.code === 'ArrowRight' || e.key === 'ArrowRight') {
-            this.switchKeys.right = true;
-            this.pulseState = { active: true, direction: 'right', startTime: now };
-            handled = true;
-          } else if (e.code === 'ArrowLeft' || e.key === 'ArrowLeft') {
-            this.switchKeys.left = true;
-            this.pulseState = { active: true, direction: 'left', startTime: now };
-            handled = true;
-          } else if (e.code === 'ArrowUp' || e.key === 'ArrowUp') {
-            this.switchKeys.up = true;
-            handled = true;
-          } else if (e.code === 'ArrowDown' || e.key === 'ArrowDown') {
-            this.switchKeys.down = true;
-            handled = true;
-          }
+          const binding = SWITCH_KEYS.find((b) => b.match(e));
+          if (!binding) return;
 
-          if (handled) {
-            e.preventDefault();
+          this.switchKeys[binding.dir] = pressed;
+          if (pressed && binding.pulse) {
+            this.pulseState = { active: true, direction: binding.dir, startTime: performance.now() / 1000 };
           }
-        });
+          e.preventDefault();
+        };
 
-        window.addEventListener('keyup', (e) => {
-          if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA')) {
-            return;
-          }
+        window.addEventListener('keydown', (e) => applySwitchKey(e, true));
+        window.addEventListener('keyup', (e) => applySwitchKey(e, false));
+      }
 
-          let handled = false;
-          if (e.code === 'Space' || e.key === ' ' || e.key === 'Spacebar' || e.keyCode === 32) {
-            this.switchKeys.right = false;
-            handled = true;
-          } else if (e.code === 'Enter' || e.key === 'Enter' || e.keyCode === 13) {
-            this.switchKeys.left = false;
-            handled = true;
-          } else if (e.code === 'ArrowRight' || e.key === 'ArrowRight') {
-            this.switchKeys.right = false;
-            handled = true;
-          } else if (e.code === 'ArrowLeft' || e.key === 'ArrowLeft') {
-            this.switchKeys.left = false;
-            handled = true;
-          } else if (e.code === 'ArrowUp' || e.key === 'ArrowUp') {
-            this.switchKeys.up = false;
-            handled = true;
-          } else if (e.code === 'ArrowDown' || e.key === 'ArrowDown') {
-            this.switchKeys.down = false;
-            handled = true;
-          }
+      /**
+       * 単押し（パルス）による重力を返す。維持時間を過ぎていればパルスを終了する。
+       * sin カーブで滑らかに減衰するため、一瞬のタップでも流れが途切れない。
+       */
+      computePulseGravity(now) {
+        if (!this.pulseState.active) return 0.0;
 
-          if (handled) {
-            e.preventDefault();
-          }
-        });
+        const elapsed = now - this.pulseState.startTime;
+        if (elapsed >= CONFIG.switchPulseDuration) {
+          this.pulseState.active = false;
+          return 0.0;
+        }
+
+        const w = Math.sin((1.0 - elapsed / CONFIG.switchPulseDuration) * Math.PI * 0.5);
+        return (this.pulseState.direction === 'right' ? 1.0 : -1.0) * CONFIG.tiltSensitivity * w;
       }
 
       update() {
         if (!this.pointerActive) {
-          this.pointerGx *= 0.90;
-          this.pointerGy *= 0.90;
+          this.pointerGx *= TUNING.gravity.pointerDecay;
+          this.pointerGy *= TUNING.gravity.pointerDecay;
         }
 
         // スイッチによる重力の計算
@@ -913,35 +1076,17 @@
 
         const isHoldRight = this.switchKeys.right && !this.switchKeys.left;
         const isHoldLeft = this.switchKeys.left && !this.switchKeys.right;
+        const holdGx = isHoldRight ? CONFIG.tiltSensitivity : (isHoldLeft ? -CONFIG.tiltSensitivity : 0.0);
 
         if (CONFIG.switchMode === 'hold') {
-          if (isHoldRight) targetSwitchGx = 1.0 * CONFIG.tiltSensitivity;
-          else if (isHoldLeft) targetSwitchGx = -1.0 * CONFIG.tiltSensitivity;
+          // 押している間だけ傾き、離すと即座に減衰
+          targetSwitchGx = holdGx;
         } else if (CONFIG.switchMode === 'pulse') {
-          if (this.pulseState.active) {
-            const elapsed = now - this.pulseState.startTime;
-            if (elapsed < CONFIG.switchPulseDuration) {
-              const w = Math.sin((1.0 - elapsed / CONFIG.switchPulseDuration) * Math.PI * 0.5);
-              targetSwitchGx = (this.pulseState.direction === 'right' ? 1.0 : -1.0) * CONFIG.tiltSensitivity * w;
-            } else {
-              this.pulseState.active = false;
-            }
-          }
+          // ワンプッシュで設定秒数だけ流れる（長押しは考慮しない）
+          targetSwitchGx = this.computePulseGravity(now);
         } else {
           // 'hybrid' (推奨: 押している間は最大加速、離した後も一定時間は滑らかにパルス減衰)
-          if (isHoldRight) {
-            targetSwitchGx = 1.0 * CONFIG.tiltSensitivity;
-          } else if (isHoldLeft) {
-            targetSwitchGx = -1.0 * CONFIG.tiltSensitivity;
-          } else if (this.pulseState.active) {
-            const elapsed = now - this.pulseState.startTime;
-            if (elapsed < CONFIG.switchPulseDuration) {
-              const w = Math.sin((1.0 - elapsed / CONFIG.switchPulseDuration) * Math.PI * 0.5);
-              targetSwitchGx = (this.pulseState.direction === 'right' ? 1.0 : -1.0) * CONFIG.tiltSensitivity * w;
-            } else {
-              this.pulseState.active = false;
-            }
-          }
+          targetSwitchGx = (holdGx !== 0.0) ? holdGx : this.computePulseGravity(now);
         }
 
         if (this.switchKeys.down && !this.switchKeys.up) {
@@ -951,14 +1096,14 @@
         }
 
         // スイッチ入力の滑らかな加減速
-        const smoothRate = (targetSwitchGx !== 0) ? 0.22 : 0.12;
+        const smoothRate = (targetSwitchGx !== 0) ? TUNING.gravity.switchAttack : TUNING.gravity.switchRelease;
         this.switchGx += (targetSwitchGx - this.switchGx) * smoothRate;
         this.switchGy += (targetSwitchGy - this.switchGy) * smoothRate;
 
         // デバッグ用スイッチ状態ラベル
-        if (this.switchGx > 0.12) {
+        if (this.switchGx > TUNING.gravity.switchLabelThreshold) {
           this.activeSwitchLabel = 'RIGHT (Space)';
-        } else if (this.switchGx < -0.12) {
+        } else if (this.switchGx < -TUNING.gravity.switchLabelThreshold) {
           this.activeSwitchLabel = 'LEFT (Enter)';
         } else {
           this.activeSwitchLabel = 'OFF';
@@ -982,12 +1127,12 @@
           rawGy = this.tiltGy + this.pointerGy + this.switchGy;
         }
 
-        this.gx = clamp(rawGx, -2.5, 2.5);
+        this.gx = clamp(rawGx, -TUNING.gravity.range, TUNING.gravity.range);
 
         if (CONFIG.gravityAxes === 'x-only') {
           this.gy = 0.0;
         } else {
-          this.gy = clamp(rawGy, -2.5, 2.5);
+          this.gy = clamp(rawGy, -TUNING.gravity.range, TUNING.gravity.range);
         }
       }
     }
@@ -1008,23 +1153,11 @@
         this.ax = 0;
         this.ay = 0;
 
-        const rand = Math.random();
-        if (rand < 0.06) {
-          this.layer = 'bokeh';
-          this.sizeScale = 2.4 + Math.random() * 1.4;
-          this.sensitivity = 0.55 + Math.random() * 0.35;
-          this.alphaMultiplier = 0.22;
-        } else if (rand < 0.25) {
-          this.layer = 'stardust';
-          this.sizeScale = 0.35 + Math.random() * 0.35;
-          this.sensitivity = 1.1 + Math.random() * 0.6;
-          this.alphaMultiplier = 0.70;
-        } else {
-          this.layer = 'comet';
-          this.sizeScale = 0.8 + Math.random() * 0.6;
-          this.sensitivity = 0.9 + Math.random() * 0.5;
-          this.alphaMultiplier = 0.75;
-        }
+        const layerSpec = pickParticleLayer();
+        this.layer = layerSpec.name;
+        this.sizeScale = layerSpec.sizeScale[0] + Math.random() * layerSpec.sizeScale[1];
+        this.sensitivity = layerSpec.sensitivity[0] + Math.random() * layerSpec.sensitivity[1];
+        this.alphaMultiplier = layerSpec.alpha;
 
         this.dampingFactor = 0.88 + Math.random() * 0.25;
 
@@ -1032,7 +1165,7 @@
         this.color = theme.palettes[Math.floor(Math.random() * theme.palettes.length)];
         
         this.history = [];
-        this.maxHistory = this.layer === 'comet' ? 5 : (this.layer === 'bokeh' ? 2 : 0);
+        this.maxHistory = layerSpec.history;
         for (let i = 0; i < this.maxHistory; i++) {
           this.history.push({ x: this.x, y: this.y });
         }
@@ -1044,15 +1177,15 @@
       update(gx, gy, dt, time, width, height) {
         const curl = getCurl(this.x, this.y, time);
 
-        const targetVx = (gx * 1.35 + curl.x * CONFIG.curlStrength * 0.08) * this.sensitivity;
+        const targetVx = (gx * TUNING.particle.gravityScale + curl.x * CONFIG.curlStrength * TUNING.particle.curlXY) * this.sensitivity;
         let targetVy = 0;
         if (CONFIG.gravityAxes === 'xy') {
-          targetVy = (gy * 1.35 + curl.y * CONFIG.curlStrength * 0.08) * this.sensitivity;
+          targetVy = (gy * TUNING.particle.gravityScale + curl.y * CONFIG.curlStrength * TUNING.particle.curlXY) * this.sensitivity;
         } else {
-          targetVy = (curl.y * CONFIG.curlStrength * 0.035) * this.sensitivity;
+          targetVy = (curl.y * CONFIG.curlStrength * TUNING.particle.curlDrift) * this.sensitivity;
         }
 
-        const steerStrength = 8.5;
+        const steerStrength = TUNING.particle.steerStrength;
         this.ax = (targetVx - this.vx * 0.5) * steerStrength;
         this.ay = (targetVy - this.vy * 0.5) * steerStrength;
 
@@ -1174,13 +1307,120 @@
     }
 
     /**
+     * Ripple - タップ／クリック位置から広がる波紋
+     *
+     * 実際の表面波と同じく、立ち上がりが速く外側へ行くほど減速する（easing）。
+     *
+     * 本体キャンバスではなく専用レイヤー（毎フレーム消去）に描く。残像が蓄積する本体に
+     * 描くと、過去フレームの輪がすべて残って「輪」ではなく的のような円盤になってしまう。
+     * 分離したことで、柔らかい光の帯と、その頂点を走る細い明線の二重構造にできる。
+     */
+    class Ripple {
+      constructor(x, y, width, height) {
+        this.x = x;
+        this.y = y;
+        this.age = 0;
+        this.life = TUNING.ripple.life;
+        this.maxRadius = Math.min(width, height) * TUNING.ripple.radiusRatio;
+
+        const theme = THEMES[CONFIG.colorTheme] || THEMES.aurora;
+        this.color = theme.palettes[Math.floor(Math.random() * theme.palettes.length)];
+      }
+
+      /** @returns {boolean} まだ生きているか */
+      update(dt) {
+        this.age += dt;
+        return this.age < this.life;
+      }
+
+      /**
+       * いま広がっている波面（半径・減衰・序列）を返す。
+       * 描画と粒子への力で同じ形を使うため、見えている波と粒子の揺れが必ず一致する。
+       */
+      activeFronts() {
+        const fronts = [];
+        const delays = TUNING.ripple.ringDelays;
+
+        for (let i = 0; i < delays.length; i++) {
+          const span = this.life - delays[i];
+          const t = (this.age - delays[i]) / span;
+          if (t <= 0 || t >= 1) continue;
+
+          // 外側ほど減速する広がり方
+          const radius = (1 - Math.pow(1 - t, 2.4)) * this.maxRadius;
+          if (radius < 1) continue;
+
+          fronts.push({
+            radius,
+            fade: Math.pow(1 - t, 1.7),
+            rank: 1 / (1 + i * 0.85)   // 後続の波ほど控えめにして先頭を主役にする
+          });
+        }
+        return fronts;
+      }
+
+      draw(ctx) {
+        const isProj = CONFIG.displayMode === 'projector';
+        const boost = isProj ? CONFIG.projectorBoost : 1.0;
+        const alphaBoost = isProj ? 1.30 : 1.0;
+        const bright = TUNING.ripple.brightness;
+
+        for (const front of this.activeFronts()) {
+          const radius = front.radius;
+          const fade = front.fade;
+          const rank = front.rank;
+
+          // ① 外周のブルーム（波の存在感を作る広い光）
+          const bloom = TUNING.ripple.bloomWidth * boost;
+          const bloomGrad = ctx.createRadialGradient(
+            this.x, this.y, Math.max(0, radius - bloom), this.x, this.y, radius + bloom);
+          bloomGrad.addColorStop(0.0, 'rgba(0, 0, 0, 0)');
+          bloomGrad.addColorStop(0.5, this.color.corona);
+          bloomGrad.addColorStop(1.0, 'rgba(0, 0, 0, 0)');
+
+          ctx.beginPath();
+          ctx.arc(this.x, this.y, radius + bloom, 0, Math.PI * 2);
+          ctx.fillStyle = bloomGrad;
+          ctx.globalAlpha = clamp(0.95 * fade * rank * alphaBoost * bright, 0, 1);
+          ctx.fill();
+
+          // ② 波の光の帯（主発色層）
+          const band = TUNING.ripple.bandWidth * boost * (0.6 + 0.4 * fade);
+          const bandGrad = ctx.createRadialGradient(
+            this.x, this.y, Math.max(0, radius - band), this.x, this.y, radius + band);
+          bandGrad.addColorStop(0.0, 'rgba(0, 0, 0, 0)');
+          bandGrad.addColorStop(0.5, this.color.halo);
+          bandGrad.addColorStop(1.0, 'rgba(0, 0, 0, 0)');
+
+          ctx.beginPath();
+          ctx.arc(this.x, this.y, radius + band, 0, Math.PI * 2);
+          ctx.fillStyle = bandGrad;
+          ctx.globalAlpha = clamp(0.80 * fade * rank * alphaBoost * bright, 0, 1);
+          ctx.fill();
+
+          // ③ 頂点を走る明線（水面が光を弾く稜線）
+          ctx.beginPath();
+          ctx.arc(this.x, this.y, radius, 0, Math.PI * 2);
+          ctx.strokeStyle = this.color.core;
+          ctx.lineWidth = (1.8 + 2.8 * fade) * boost;
+          ctx.globalAlpha = clamp(0.90 * fade * rank * alphaBoost * bright, 0, 1);
+          ctx.stroke();
+        }
+      }
+    }
+
+    /**
      * ParticleSystem
      */
     class ParticleSystem {
-      constructor(canvas) {
+      constructor(canvas, rippleCanvas) {
         this.canvas = canvas;
         this.ctx = canvas.getContext('2d');
+        this.rippleCanvas = rippleCanvas || null;
+        this.rippleCtx = this.rippleCanvas ? this.rippleCanvas.getContext('2d') : null;
+        this._rippleLayerVisible = false;
         this.particles = [];
+        this.ripples = [];
         this.frameCount = 0;
         this._resizeScheduled = false;
 
@@ -1223,6 +1463,12 @@
         this.canvas.height = Math.floor(h * dpr);
         this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
+        if (this.rippleCanvas) {
+          this.rippleCanvas.width = Math.floor(w * dpr);
+          this.rippleCanvas.height = Math.floor(h * dpr);
+          this.rippleCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        }
+
         // サイズ変更時に粒子座標を新しい画面サイズに比例スケーリング
         if (this.particles && this.particles.length > 0 && Math.abs(h - oldH) > 4) {
           const scaleX = oldW > 0 ? (w / oldW) : 1;
@@ -1244,6 +1490,91 @@
         this.particles = [];
         for (let i = 0; i < CONFIG.particleCount; i++) {
           this.particles.push(new Particle(this.width, this.height));
+        }
+      }
+
+      /**
+       * 波紋を専用レイヤーに描く。毎フレーム消去するので残像が蓄積せず、輪郭が保たれる。
+       * 波紋がないフレームでは消去も描画も行わないため、通常時のコストはゼロ。
+       */
+      drawRipples() {
+        const rctx = this.rippleCtx;
+        if (!rctx) return;
+
+        if (this.ripples.length === 0) {
+          if (this._rippleLayerVisible) {
+            rctx.clearRect(0, 0, this.width, this.height);
+            this.rippleCanvas.style.display = 'none';
+            this._rippleLayerVisible = false;
+          }
+          return;
+        }
+
+        if (!this._rippleLayerVisible) {
+          this.rippleCanvas.style.display = 'block';
+          this._rippleLayerVisible = true;
+        }
+
+        rctx.clearRect(0, 0, this.width, this.height);
+        rctx.globalCompositeOperation = 'lighter';
+        for (const ripple of this.ripples) {
+          ripple.draw(rctx);
+        }
+        rctx.globalCompositeOperation = 'source-over';
+        rctx.globalAlpha = 1.0;
+      }
+
+      /** 波紋の時間を進め、寿命の尽きたものを捨てる */
+      updateRipples(dt) {
+        for (let i = this.ripples.length - 1; i >= 0; i--) {
+          if (!this.ripples[i].update(dt)) this.ripples.splice(i, 1);
+        }
+      }
+
+      /**
+       * 波面が通過した粒子を揺らす。
+       *
+       * 進行波の中の水粒子と同じく、波面の**前方では外向き・通過後は内向き**に働く
+       * （offset に対する sin は奇関数なので、通り過ぎた後の正味の移動はほぼゼロ）。
+       * 単純に外向きへ押すだけにすると、連打したときに粒子が画面端へ掃き寄せられて
+       * 溜まり、edgePoolFade で音が消えてしまう。それを避けるための形。
+       *
+       * 速度に加えるので、粒子は押されたあと既存の減衰で自然に流れへ戻る。
+       */
+      applyRippleForces(dt) {
+        if (this.ripples.length === 0) return;
+
+        const reach = TUNING.ripple.pushReach;
+        const strength = TUNING.ripple.pushStrength;
+        if (strength === 0) return;
+
+        for (const ripple of this.ripples) {
+          for (const front of ripple.activeFronts()) {
+            const amp = strength * front.fade * front.rank;
+            if (amp < 0.01) continue;
+
+            for (const p of this.particles) {
+              const dx = p.x - ripple.x;
+              const dy = p.y - ripple.y;
+              const dist = Math.sqrt(dx * dx + dy * dy);
+              if (dist < 1) continue;
+
+              const offset = dist - front.radius;
+              if (offset < -reach || offset > reach) continue;
+
+              const push = Math.sin((offset / reach) * Math.PI) * amp * p.sensitivity * dt;
+              p.vx += (dx / dist) * push;
+              p.vy += (dy / dist) * push;
+            }
+          }
+        }
+      }
+
+      /** タップ／クリック位置に波紋を生む。古いものから捨てて同時数を抑える。 */
+      spawnRipple(x, y) {
+        this.ripples.push(new Ripple(x, y, this.width, this.height));
+        if (this.ripples.length > TUNING.ripple.maxConcurrent) {
+          this.ripples.splice(0, this.ripples.length - TUNING.ripple.maxConcurrent);
         }
       }
 
@@ -1279,8 +1610,8 @@
         this.frameCount++;
 
         // 1. 粒子間近接反発（3フレームに1回で軽量化、視覚的に差異なし）
-        if (this.frameCount % 3 === 0) {
-          const minDist = CONFIG.particleSize * 2.4;
+        if (this.frameCount % TUNING.particle.separationInterval === 0) {
+          const minDist = CONFIG.particleSize * TUNING.particle.separationRadius;
           const minDistSq = minDist * minDist;
           const len = this.particles.length;
 
@@ -1295,8 +1626,8 @@
               if (distSq < minDistSq && distSq > 0.0001) {
                 const dist = Math.sqrt(distSq);
                 const overlap = (minDist - dist) / dist;
-                const pushX = dx * overlap * 0.07;
-                const pushY = dy * overlap * 0.07;
+                const pushX = dx * overlap * TUNING.particle.separationPush;
+                const pushY = dy * overlap * TUNING.particle.separationPush;
 
                 p1.x -= pushX;
                 p1.y -= pushY;
@@ -1309,6 +1640,11 @@
 
         // 2. 残像減衰（プロジェクターの黒浮き対策込み）
         const safeDt = Math.min(dt, 0.1);
+
+        // 波紋を進めてから粒子へ力を加える（見えている波面と揺れを一致させる）
+        this.updateRipples(safeDt);
+        this.applyRippleForces(safeDt);
+
         const minFloor = CONFIG.displayMode === 'projector' ? 0.04 : 0.02;
         const fadeAlpha = clamp(1.0 - Math.exp(-safeDt / CONFIG.trailTau), minFloor, 0.95);
 
@@ -1325,7 +1661,8 @@
         let sumX = 0;
         let sumY = 0;
         let movingCount = 0;
-        let pooledCount = 0;
+        let pooledLeft = 0;
+        let pooledRight = 0;
         let maxEnergy = 0;
         let salientParticle = null;
 
@@ -1336,8 +1673,10 @@
           p.draw(ctx);
 
           // 音響特徴量抽出
-          if (p.x < edgeMargin || p.x > this.width - edgeMargin) {
-            pooledCount++;
+          if (p.x < edgeMargin) {
+            pooledLeft++;
+          } else if (p.x > this.width - edgeMargin) {
+            pooledRight++;
           }
 
           const spd = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
@@ -1359,11 +1698,15 @@
         ctx.globalCompositeOperation = 'source-over';
         ctx.globalAlpha = 1.0;
 
+        this.drawRipples();
+
         return {
           meanSpeed: movingCount > 0 ? sumSpeed / movingCount : 0,
           centroidX: movingCount > 0 ? (sumX / movingCount) / this.width : 0.5,
           centroidY: movingCount > 0 ? (sumY / movingCount) / this.height : 0.5,
-          pooledRatio: pooledCount / this.particles.length,
+          pooledRatio: (pooledLeft + pooledRight) / this.particles.length,
+          pooledLeftRatio: pooledLeft / this.particles.length,
+          pooledRightRatio: pooledRight / this.particles.length,
           maxEnergy,
           salientParticle,
           width: this.width,
@@ -1395,6 +1738,17 @@
 
         // Meso: Granular 音響管理
         this.lastGrainTime = 0;
+
+        // 定位優先の音源用サブバス（setupReverb で構築）
+        this.reverbBusGrain = null;
+        this.reverbBusBell = null;
+        this.reverbBusAnchor = null;
+        this.reverbBusRipple = null;
+
+        // 左右端の到達を知らせるアンカー音の状態
+        this.noiseBuffer = null;
+        this.edgeAnchorSide = null;
+        this.lastEdgeAnchorTime = 0;
 
         // Micro: Modal 結晶ベル管理
         this.activeModalVoices = 0;
@@ -1457,9 +1811,23 @@
           this.reverbSendGain.connect(convolver);
           convolver.connect(reverbFilter);
           reverbFilter.connect(this.masterGain);
+
+          // 定位を優先する音源は、送出を絞ったサブバス経由で残響へ送る
+          this.reverbBusGrain = this._makeReverbSubBus(TUNING.audio.reverbSendGrain);
+          this.reverbBusBell = this._makeReverbSubBus(TUNING.audio.reverbSendBell);
+          this.reverbBusAnchor = this._makeReverbSubBus(TUNING.audio.reverbSendAnchor);
+          this.reverbBusRipple = this._makeReverbSubBus(TUNING.audio.reverbSendRipple);
         } catch (e) {
           console.warn('Reverb setup failed, using dry fallback', e);
         }
+      }
+
+      /** 送出量を絞ったリバーブ用サブバスを作る（音源ごとにノードを増やさないため常設） */
+      _makeReverbSubBus(scale) {
+        const bus = this.ctx.createGain();
+        bus.gain.value = scale;
+        bus.connect(this.reverbSendGain);
+        return bus;
       }
 
       setupStreamNoise() {
@@ -1482,6 +1850,8 @@
           b6 = white * 0.115926;
         }
 
+        this.noiseBuffer = buffer; // 端到達音の広帯域打撃にも再利用する
+
         this.streamNoiseSource = this.ctx.createBufferSource();
         this.streamNoiseSource.buffer = buffer;
         this.streamNoiseSource.loop = true;
@@ -1494,19 +1864,9 @@
         this.streamGain = this.ctx.createGain();
         this.streamGain.gain.value = 0.0001; // 初期状態は完全沈黙
 
-        this.streamPanner = this.ctx.createStereoPanner ? this.ctx.createStereoPanner() : null;
-
         this.streamNoiseSource.connect(this.streamFilter);
         this.streamFilter.connect(this.streamGain);
-
-        if (this.streamPanner) {
-          this.streamGain.connect(this.streamPanner);
-          this.streamPanner.connect(this.masterGain);
-          if (this.reverbSendGain) this.streamPanner.connect(this.reverbSendGain);
-        } else {
-          this.streamGain.connect(this.masterGain);
-          if (this.reverbSendGain) this.streamGain.connect(this.reverbSendGain);
-        }
+        this.streamPanner = this._routeToOutput(this.streamGain);
 
         this.streamNoiseSource.start();
       }
@@ -1548,26 +1908,32 @@
         }
       }
 
-      getScaleFrequencies() {
-        if (CONFIG.pitchScale === 'major') {
-          return [
-            130.81, 146.83, 164.81, 174.61, 196.00, 220.00, 246.94,
-            261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 493.88,
-            523.25, 587.33, 659.25, 783.99, 880.00, 1046.50
-          ];
-        } else if (CONFIG.pitchScale === 'crystal') {
-          return [
-            523.25, 659.25, 783.99, 1046.50, 1318.51, 1567.98, 2093.00, 2637.02
-          ];
-        } else {
-          // ペンタトニック（最も調和が高く心地よい）
-          return [
-            130.81, 146.83, 164.81, 196.00, 220.00,
-            261.63, 293.66, 329.63, 392.00, 440.00,
-            523.25, 587.33, 659.25, 783.99, 880.00,
-            1046.50, 1174.66, 1318.51
-          ];
+      /**
+       * 音源をステレオ定位を経てマスター出力とリバーブセンドへ接続する。
+       * StereoPanner 非対応環境では定位なしで直結する。生成した panner を返す。
+       *
+       * sendBus に送出を絞ったサブバスを渡すと、その音源だけ残響が浅くなり直接音が立つ。
+       * 省略時は通常の送出量。リバーブ構築に失敗した環境では送出自体を行わない。
+       */
+      _routeToOutput(node, panValue = null, time = 0, sendBus = null) {
+        const panner = this.ctx.createStereoPanner ? this.ctx.createStereoPanner() : null;
+
+        if (panner) {
+          if (panValue !== null) panner.pan.setValueAtTime(panValue, time);
+          node.connect(panner);
         }
+
+        const tail = panner || node;
+        tail.connect(this.masterGain);
+
+        const send = sendBus || this.reverbSendGain;
+        if (send) tail.connect(send);
+
+        return panner;
+      }
+
+      getScaleFrequencies() {
+        return SCALES[CONFIG.pitchScale] || SCALES.pentatonic;
       }
 
       getFrequencyForY(normY) {
@@ -1577,15 +1943,22 @@
         return freqs[clampedIndex];
       }
 
-      // 左右定位の非線形パワーカーブ計算（中央付近からの分離感を大幅に強調）
+      /**
+       * 左右定位の非線形カーブ。中央付近の分離を強調しつつ、画面端では必ず ±1.0 に到達する。
+       *
+       * stereoWidth は「パン値の倍率」ではなく「カーブの鋭さ」を決める。倍率方式だと
+       * 画面の外周でパン値が ±1.0 に張り付き、そこから先の位置差が全て同じ定位に潰れる
+       * （旧実装では既定値でも外周30%が区別できなかった）。指数方式なら全域が単調増加で、
+       * 画面のどの位置も互いに異なる定位として聴き分けられる。
+       */
       computeStereoPan(normX, multiplier = 1.0) {
-        const signed = (normX - 0.5) * 2.0; // -1.0(左端) 〜 +1.0(右端)
+        const signed = clamp((normX - 0.5) * 2.0, -1.0, 1.0); // -1.0(左端) 〜 +1.0(右端)
         if (Math.abs(signed) < 0.001) return 0.0;
         const sign = signed < 0 ? -1 : 1;
         const width = (typeof CONFIG.stereoWidth === 'number') ? CONFIG.stereoWidth : 1.45;
-        // 0.65乗カーブで中央付近からの広がりを加速し、stereoWidth倍率を適用
-        const spread = Math.pow(Math.abs(signed), 0.65) * width * multiplier;
-        return clamp(sign * spread, -1.0, 1.0);
+        // width * multiplier が大きいほど指数が小さくなり、中央からの立ち上がりが鋭くなる
+        const exponent = clamp(1.0 / (1.0 + (width * multiplier - 1.0) * 2.0), 0.15, 4.0);
+        return sign * Math.pow(Math.abs(signed), exponent);
       }
 
       // Meso: Granular音粒の生成（流速に連動する水泡・光のせせらぎ）
@@ -1606,22 +1979,11 @@
         grainGain.gain.linearRampToValueAtTime(vol, now + grainDuration * 0.3);
         grainGain.gain.exponentialRampToValueAtTime(0.0001, now + grainDuration);
 
-        const panner = this.ctx.createStereoPanner ? this.ctx.createStereoPanner() : null;
-        if (panner) {
-          const jitter = (Math.random() - 0.5) * 0.18;
-          const panVal = clamp(this.computeStereoPan(centroidX, 1.05) + jitter, -1.0, 1.0);
-          panner.pan.setValueAtTime(panVal, now);
-        }
-
         osc.connect(grainGain);
-        if (panner) {
-          grainGain.connect(panner);
-          panner.connect(this.masterGain);
-          if (this.reverbSendGain) panner.connect(this.reverbSendGain);
-        } else {
-          grainGain.connect(this.masterGain);
-          if (this.reverbSendGain) grainGain.connect(this.reverbSendGain);
-        }
+
+        const jitter = (Math.random() - 0.5) * TUNING.audio.grainPanJitter;
+        const panVal = clamp(this.computeStereoPan(centroidX, 1.05) + jitter, -1.0, 1.0);
+        this._routeToOutput(grainGain, panVal, now, this.reverbBusGrain);
 
         osc.start(now);
         osc.stop(now + grainDuration + 0.05);
@@ -1635,32 +1997,13 @@
         const now = this.ctx.currentTime;
         const f0 = this.getFrequencyForY(normY);
 
-        const partials = [
-          { ratio: 1.000, gain: 0.24, decay: 1.20 },
-          { ratio: 2.756, gain: 0.09, decay: 0.65 },
-          { ratio: 5.404, gain: 0.03, decay: 0.35 }
-        ];
-
-        const panner = this.ctx.createStereoPanner ? this.ctx.createStereoPanner() : null;
-        if (panner) {
-          const panVal = this.computeStereoPan(normX, 1.25);
-          panner.pan.setValueAtTime(panVal, now);
-        }
-
         const voiceGain = this.ctx.createGain();
         const baseVol = Math.min(0.2 + energy * 0.08, 0.55) * this.edgePoolFade;
         voiceGain.gain.setValueAtTime(baseVol, now);
 
-        if (panner) {
-          voiceGain.connect(panner);
-          panner.connect(this.masterGain);
-          if (this.reverbSendGain) panner.connect(this.reverbSendGain);
-        } else {
-          voiceGain.connect(this.masterGain);
-          if (this.reverbSendGain) voiceGain.connect(this.reverbSendGain);
-        }
+        this._routeToOutput(voiceGain, this.computeStereoPan(normX, 1.25), now, this.reverbBusBell);
 
-        partials.forEach((p) => {
+        MODAL_PARTIALS.forEach((p) => {
           const osc = this.ctx.createOscillator();
           osc.type = 'sine';
           osc.frequency.setValueAtTime(f0 * p.ratio, now);
@@ -1680,6 +2023,168 @@
         setTimeout(() => {
           this.activeModalVoices = Math.max(0, this.activeModalVoices - 1);
         }, 1250);
+      }
+
+      /**
+       * 池に石を落としたときの着水音。
+       *
+       * 「ポチャン」という音の主成分は、水面が閉じる際に水中へ取り込まれた気泡の振動である
+       * （Minnaert 1933 / van den Doel 2005）。気泡は減衰しながら振動数が上がっていくため、
+       * 単なる減衰サイン波ではなく「ピッチが上がりながら消える」ことが realism の鍵になる。
+       * ここでは (1) 着水の広帯域ノイズ (2) 主気泡の上昇ピッチ振動 (3) 遅れて弾ける副気泡
+       * の3要素で合成している。
+       *
+       * 主気泡の周波数は画面Yに対応させる（上＝小さい石＝高い音）。結晶ベルの Y→音高と
+       * 同じ向きなので、二つの音が矛盾した高さの手がかりを与えることがない。
+       */
+      triggerWaterDrop(normX, normY) {
+        if (!this.initialized) return;
+
+        const now = this.ctx.currentTime;
+        const A = TUNING.audio;
+
+        const voiceGain = this.ctx.createGain();
+        voiceGain.gain.setValueAtTime(A.rippleVolume, now);
+        this._routeToOutput(voiceGain, this.computeStereoPan(normX, A.ripplePanWidth), now,
+                            this.reverbBusRipple);
+
+        // (1) 水面が割れる瞬間の広帯域ノイズ
+        if (this.noiseBuffer) {
+          const splash = this.ctx.createBufferSource();
+          splash.buffer = this.noiseBuffer;
+
+          const splashFilter = this.ctx.createBiquadFilter();
+          splashFilter.type = 'bandpass';
+          splashFilter.frequency.setValueAtTime(2600, now);
+          splashFilter.frequency.exponentialRampToValueAtTime(1200, now + 0.05);
+          splashFilter.Q.value = 0.8;
+
+          const splashGain = this.ctx.createGain();
+          splashGain.gain.setValueAtTime(0.0001, now);
+          splashGain.gain.linearRampToValueAtTime(0.55, now + 0.003);
+          splashGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.05);
+
+          splash.connect(splashFilter);
+          splashFilter.connect(splashGain);
+          splashGain.connect(voiceGain);
+
+          splash.start(now, Math.random() * 1.5);
+          splash.stop(now + 0.10);
+        }
+
+        // (2) 主気泡（この音の芯）
+        const height = clamp(1 - normY, 0, 1); // 画面上ほど小さい石＝高い音
+        const f0 = (A.rippleFreqLow + (A.rippleFreqHigh - A.rippleFreqLow) * height)
+                 * (0.92 + Math.random() * 0.16);
+        this._spawnBubble(f0, A.rippleFreqRise, 1.0,
+                          A.rippleDecay * (0.85 + Math.random() * 0.30), now, voiceGain);
+
+        // (3) 遅れて弾ける副気泡（realism を作る細部）
+        const extras = 2 + Math.floor(Math.random() * 2);
+        for (let i = 0; i < extras; i++) {
+          this._spawnBubble(f0 * (2.1 + Math.random() * 2.4), 1.35,
+                            0.14 + Math.random() * 0.14,
+                            0.04 + Math.random() * 0.05,
+                            now + 0.02 + Math.random() * 0.10, voiceGain);
+        }
+      }
+
+      /** 単一の気泡振動（減衰しながらピッチが上がるサイン波）を鳴らす */
+      _spawnBubble(freq, rise, level, decay, startTime, destination) {
+        const osc = this.ctx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, startTime);
+        osc.frequency.exponentialRampToValueAtTime(freq * rise, startTime + decay);
+
+        const gain = this.ctx.createGain();
+        gain.gain.setValueAtTime(0.0001, startTime);
+        gain.gain.linearRampToValueAtTime(level, startTime + 0.005);
+        gain.gain.exponentialRampToValueAtTime(0.0001, startTime + decay);
+
+        osc.connect(gain);
+        gain.connect(destination);
+
+        osc.start(startTime);
+        osc.stop(startTime + decay + 0.05);
+      }
+
+      /**
+       * 左右端の到達を知らせるアンカー音。画面の絶対座標を耳に与える「基準点」なので、
+       * 位置によらず常に同じ音色・同じ音高で、必ず左右いっぱいに振り切って鳴らす。
+       *
+       * 広帯域のノイズ打撃を主成分にしているのは、高域成分を含む音ほどスピーカー再生での
+       * 定位が明瞭になるため。端に光が溜まって全体が静まっているときこそ必要な音なので、
+       * edgePoolFade による減衰を受けない。
+       */
+      triggerEdgeAnchor(side) {
+        const now = this.ctx.currentTime;
+
+        const voiceGain = this.ctx.createGain();
+        voiceGain.gain.setValueAtTime(TUNING.audio.edgeAnchorVolume, now);
+        this._routeToOutput(voiceGain, side === 'right' ? 1.0 : -1.0, now, this.reverbBusAnchor);
+
+        // 広帯域の短い打撃（定位の主成分）
+        if (this.noiseBuffer) {
+          const burst = this.ctx.createBufferSource();
+          burst.buffer = this.noiseBuffer;
+
+          const bandpass = this.ctx.createBiquadFilter();
+          bandpass.type = 'bandpass';
+          bandpass.frequency.value = 1500;
+          bandpass.Q.value = 1.8;
+
+          const burstGain = this.ctx.createGain();
+          burstGain.gain.setValueAtTime(0.0001, now);
+          burstGain.gain.linearRampToValueAtTime(0.9, now + 0.008);
+          burstGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
+
+          burst.connect(bandpass);
+          bandpass.connect(burstGain);
+          burstGain.connect(voiceGain);
+
+          burst.start(now, Math.random() * 1.5);
+          burst.stop(now + 0.30);
+        }
+
+        // 打撃を柔らかく響かせる倍音（全音階に共通して含まれる C5 固定）
+        const osc = this.ctx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(TUNING.audio.edgeAnchorFreq, now);
+
+        const oscGain = this.ctx.createGain();
+        oscGain.gain.setValueAtTime(0.0001, now);
+        oscGain.gain.linearRampToValueAtTime(0.5, now + 0.012);
+        oscGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.35);
+
+        osc.connect(oscGain);
+        oscGain.connect(voiceGain);
+
+        osc.start(now);
+        osc.stop(now + 0.40);
+      }
+
+      /**
+       * 左右端への到達を検出し、到達した瞬間に一度だけアンカー音を鳴らす。
+       * ヒステリシス（到達 0.30 / 解除 0.18）により、しきい値付近での連打を防ぐ。
+       */
+      updateEdgeAnchor(metrics, now) {
+        const { edgeAnchorOn, edgeAnchorOff, edgeAnchorInterval } = TUNING.audio;
+
+        // 溜まっていた側の光が十分に減ったら、その側の「到達済み」状態を解除する
+        if (this.edgeAnchorSide) {
+          const held = this.edgeAnchorSide === 'right'
+            ? metrics.pooledRightRatio : metrics.pooledLeftRatio;
+          if (held < edgeAnchorOff) this.edgeAnchorSide = null;
+        }
+
+        const side = metrics.pooledRightRatio >= edgeAnchorOn ? 'right'
+                   : (metrics.pooledLeftRatio >= edgeAnchorOn ? 'left' : null);
+
+        if (side && side !== this.edgeAnchorSide && now - this.lastEdgeAnchorTime > edgeAnchorInterval) {
+          this.edgeAnchorSide = side;
+          this.lastEdgeAnchorTime = now;
+          this.triggerEdgeAnchor(side);
+        }
       }
 
       processFrame(metrics) {
@@ -1738,7 +2243,12 @@
           }
         }
 
-        // 7. Micro Layer: 顕著イベントに限定した Modal 結晶ベル発音
+        // 7. 左右端への到達を知らせるアンカー音（edgePoolFade の減衰を受けない）
+        if (CONFIG.edgeAnchor === 'on') {
+          this.updateEdgeAnchor(metrics, now);
+        }
+
+        // 8. Micro Layer: 顕著イベントに限定した Modal 結晶ベル発音
         if (metrics.salientParticle && this.edgePoolFade > 0.15) {
           const chimeInterval = Math.max(0.18, 0.65 - CONFIG.soundDensity * 0.5);
           if (now - this.lastChimeTime > chimeInterval && metrics.maxEnergy > 1.2) {
@@ -1758,7 +2268,7 @@
       constructor() {
         this.canvas = document.getElementById('stage');
         this.gravity = new VirtualGravity();
-        this.particleSystem = new ParticleSystem(this.canvas);
+        this.particleSystem = new ParticleSystem(this.canvas, document.getElementById('ripple-layer'));
         this.audioSystem = new AudioSystem();
 
         // デバッグ表示用DOM要素をキャッシュ（毎フレームのgetElementById呼び出しを排除）
@@ -1842,6 +2352,33 @@
         window.addEventListener('pointerdown', unlockAudio, { passive: true });
         window.addEventListener('touchstart', unlockAudio, { passive: true });
 
+        // 画面タップ／左クリックで広がる波紋と着水音。
+        // 指・ペンは触れた位置から、マウスの左クリックはランダムな位置から広がる
+        // （スイッチをマウスクリックに割り当てて使う場合、押した「位置」に意味がないため）。
+        window.addEventListener('pointerdown', (e) => {
+          if (CONFIG.rippleEffect !== 'on') return;
+          if (!overlay.classList.contains('hidden')) return;
+          if (e.button !== undefined && e.button !== 0) return;
+          if (e.target && e.target.closest && e.target.closest('#settings-panel, .top-controls, #start-overlay')) return;
+
+          const w = this.particleSystem.width;
+          const h = this.particleSystem.height;
+          const isDirectPointing = (e.pointerType === 'touch' || e.pointerType === 'pen');
+
+          let x, y;
+          if (isDirectPointing) {
+            x = e.clientX;
+            y = e.clientY;
+          } else {
+            const margin = TUNING.ripple.randomMargin;
+            x = (margin + Math.random() * (1 - margin * 2)) * w;
+            y = (margin + Math.random() * (1 - margin * 2)) * h;
+          }
+
+          this.particleSystem.spawnRipple(x, y);
+          this.audioSystem.triggerWaterDrop(x / w, y / h);
+        });
+
         // 全画面トグルボタン
         const fullscreenToggle = document.getElementById('fullscreen-toggle');
         const btnToggleFullscreen = document.getElementById('btn-toggle-fullscreen');
@@ -1873,97 +2410,48 @@
           } catch (e) {}
         };
 
-        // スライダーバインド
-        const bindSlider = (elementId, displayId, configKey, isFloat = true) => {
-          const el = document.getElementById(elementId);
-          const display = document.getElementById(displayId);
-          if (!el || !display) return;
-          el.value = CONFIG[configKey];
-          display.textContent = isFloat ? CONFIG[configKey].toFixed(2) : CONFIG[configKey];
+        // スライダー配線（SLIDERS 定義に従って一括バインド）
+        for (const spec of SLIDERS) {
+          const el = document.getElementById('param-' + spec.slug);
+          const display = document.getElementById('val-' + spec.slug);
+          if (!el || !display) continue;
+
+          const render = (value) => {
+            display.textContent = spec.float ? value.toFixed(2) : value;
+          };
+
+          el.value = CONFIG[spec.key];
+          render(CONFIG[spec.key]);
 
           el.addEventListener('input', (e) => {
-            const val = isFloat ? parseFloat(e.target.value) : parseInt(e.target.value, 10);
-            CONFIG[configKey] = val;
-            display.textContent = isFloat ? val.toFixed(2) : val;
-            if (configKey === 'masterVolume') {
-              this.audioSystem.updateVolume();
-            }
-            saveConfig();
-          });
-        };
-
-        bindSlider('param-projector-boost', 'val-projector-boost', 'projectorBoost', true);
-        bindSlider('param-tilt-sensitivity', 'val-tilt-sensitivity', 'tiltSensitivity', true);
-        bindSlider('param-switch-pulse-duration', 'val-switch-pulse-duration', 'switchPulseDuration', true);
-        bindSlider('param-curl-strength', 'val-curl-strength', 'curlStrength', true);
-        bindSlider('param-flow-scale', 'val-flow-scale', 'flowScale', true);
-        bindSlider('param-trail-tau', 'val-trail-tau', 'trailTau', true);
-        bindSlider('param-particle-count', 'val-particle-count', 'particleCount', false);
-        bindSlider('param-particle-size', 'val-particle-size', 'particleSize', false);
-        bindSlider('param-master-volume', 'val-master-volume', 'masterVolume', true);
-        bindSlider('param-stream-volume', 'val-stream-volume', 'streamVolume', true);
-        bindSlider('param-sound-density', 'val-sound-density', 'soundDensity', true);
-        bindSlider('param-stereo-width', 'val-stereo-width', 'stereoWidth', true);
-
-        // セレクトボックス
-        const selectDisplayMode = document.getElementById('select-display-mode');
-        const itemProjectorBoost = document.getElementById('item-projector-boost');
-        if (selectDisplayMode) {
-          selectDisplayMode.value = CONFIG.displayMode;
-          if (itemProjectorBoost) itemProjectorBoost.style.display = (CONFIG.displayMode === 'projector') ? 'block' : 'none';
-          selectDisplayMode.addEventListener('change', (e) => {
-            CONFIG.displayMode = e.target.value;
-            if (itemProjectorBoost) itemProjectorBoost.style.display = (CONFIG.displayMode === 'projector') ? 'block' : 'none';
+            const value = spec.float ? parseFloat(e.target.value) : parseInt(e.target.value, 10);
+            CONFIG[spec.key] = value;
+            render(value);
+            if (spec.apply) spec.apply(this, value);
             saveConfig();
           });
         }
 
-        const selectSwitchMode = document.getElementById('select-switch-mode');
-        const itemSwitchPulse = document.getElementById('item-switch-pulse');
-        if (selectSwitchMode) {
-          selectSwitchMode.value = CONFIG.switchMode;
-          if (itemSwitchPulse) itemSwitchPulse.style.display = (CONFIG.switchMode === 'hold') ? 'none' : 'block';
-          selectSwitchMode.addEventListener('change', (e) => {
-            CONFIG.switchMode = e.target.value;
-            if (itemSwitchPulse) {
-              itemSwitchPulse.style.display = (CONFIG.switchMode === 'hold') ? 'none' : 'block';
-            }
-            saveConfig();
-          });
-        }
+        // セレクトボックス配線（SELECTS 定義に従って一括バインド）
+        for (const spec of SELECTS) {
+          const el = document.getElementById('select-' + spec.slug);
+          if (!el) continue;
 
-        const selectTheme = document.getElementById('select-color-theme');
-        if (selectTheme) {
-          selectTheme.value = CONFIG.colorTheme;
-          selectTheme.addEventListener('change', (e) => {
-            this.particleSystem.applyTheme(e.target.value);
-            saveConfig();
-          });
-        }
+          // 依存パラメータ（プロジェクター倍率・パルス維持時間）の表示切替
+          const syncToggle = (value) => {
+            if (!spec.toggles) return;
+            const item = document.getElementById(spec.toggles.id);
+            if (item) item.style.display = spec.toggles.when(value) ? 'block' : 'none';
+          };
 
-        const selectInputMode = document.getElementById('select-input-mode');
-        if (selectInputMode) {
-          selectInputMode.value = CONFIG.inputMode;
-          selectInputMode.addEventListener('change', (e) => {
-            CONFIG.inputMode = e.target.value;
-            saveConfig();
-          });
-        }
+          el.value = CONFIG[spec.key];
+          syncToggle(CONFIG[spec.key]);
 
-        const selectAxes = document.getElementById('select-gravity-axes');
-        if (selectAxes) {
-          selectAxes.value = CONFIG.gravityAxes;
-          selectAxes.addEventListener('change', (e) => {
-            CONFIG.gravityAxes = e.target.value;
-            saveConfig();
-          });
-        }
-
-        const selectPitch = document.getElementById('select-pitch-scale');
-        if (selectPitch) {
-          selectPitch.value = CONFIG.pitchScale;
-          selectPitch.addEventListener('change', (e) => {
-            CONFIG.pitchScale = e.target.value;
+          el.addEventListener('change', (e) => {
+            const value = e.target.value;
+            CONFIG[spec.key] = value;
+            syncToggle(value);
+            if (spec.apply) spec.apply(this, value);
             saveConfig();
           });
         }
